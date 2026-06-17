@@ -294,17 +294,34 @@ static void mqtt_heartbeat_task(void *pvParameters)
     }
 }
 
+void clean_broker_host(char* dst, const char* src, size_t dst_len) {
+    const char* start = src;
+    const char* proto_end = strstr(src, "://");
+    if (proto_end) {
+        start = proto_end + 3;
+    }
+    size_t i = 0;
+    while (*start && *start != '/' && *start != ':' && i < dst_len - 1) {
+        dst[i++] = *start++;
+    }
+    dst[i] = '\0';
+}
+
 void mqtt_app_start(const char* broker, int port, const char* user, const char* pass)
 {
+    char clean_host[128] = {0};
+    clean_broker_host(clean_host, broker, sizeof(clean_host));
+
     ESP_LOGI(MQTT_TAG, "============================================");
     ESP_LOGI(MQTT_TAG, "Starting MQTT Client");
-    ESP_LOGI(MQTT_TAG, "  Broker: %s:%d", broker, port);
-    ESP_LOGI(MQTT_TAG, "  User  : %s", strlen(user) > 0 ? user : "[none]");
-    ESP_LOGI(MQTT_TAG, "  Dev ID: %.16s...", g_dev_id);
+    ESP_LOGI(MQTT_TAG, "  Raw Broker  : %s", broker);
+    ESP_LOGI(MQTT_TAG, "  Clean Broker: %s:%d", clean_host, port);
+    ESP_LOGI(MQTT_TAG, "  User        : %s", strlen(user) > 0 ? user : "[none]");
+    ESP_LOGI(MQTT_TAG, "  Dev ID      : %.16s...", g_dev_id);
     ESP_LOGI(MQTT_TAG, "============================================");
 
     char uri[256];
-    snprintf(uri, sizeof(uri), "mqtt://%s:%d", broker, port);
+    snprintf(uri, sizeof(uri), "mqtt://%s:%d", clean_host, port);
 
     esp_mqtt_client_config_t mqtt_cfg = {};
     mqtt_cfg.broker.address.uri = uri;
