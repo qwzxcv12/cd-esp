@@ -282,6 +282,21 @@ const char* html_page = R"html(
                 </div>
             </div>
 
+            <div class="section">
+                <div class="section__title">
+                    <span class="section__index">04</span>
+                    <span class="section__label">Device Credentials</span>
+                </div>
+                <div class="field">
+                    <label for="dev_id">Device ID</label>
+                    <input type="text" id="dev_id" name="dev_id" placeholder="Device ID" value="{{DEV_ID}}">
+                </div>
+                <div class="field">
+                    <label for="dev_key">Device KEY</label>
+                    <input type="text" id="dev_key" name="dev_key" placeholder="Device KEY" value="{{DEV_KEY}}">
+                </div>
+            </div>
+
             <button type="submit" class="submit">Save &amp; Reboot</button>
             <div class="footnote">Settings are written to flash and applied on reboot.<br><strong>Antigravity ESP-IDF Manager</strong></div>
         </form>

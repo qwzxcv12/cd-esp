@@ -138,6 +138,34 @@ esp_err_t read_ws_config(char* url, size_t url_len) {
     return ESP_OK;
 }
 
+esp_err_t save_dev_credentials(const char* dev_id, const char* dev_key) {
+    nvs_handle_t my_handle;
+    esp_err_t err = nvs_open("dev_creds", NVS_READWRITE, &my_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error opening NVS handle: %s", esp_err_to_name(err));
+        return err;
+    }
+    nvs_set_str(my_handle, "dev_id", dev_id);
+    nvs_set_str(my_handle, "dev_key", dev_key);
+    nvs_commit(my_handle);
+    nvs_close(my_handle);
+    return ESP_OK;
+}
+
+esp_err_t read_dev_credentials(char* dev_id, size_t id_len, char* dev_key, size_t key_len) {
+    nvs_handle_t my_handle;
+    esp_err_t err = nvs_open("dev_creds", NVS_READONLY, &my_handle);
+    if (err != ESP_OK) {
+        dev_id[0] = '\0';
+        dev_key[0] = '\0';
+        return err;
+    }
+    if (nvs_get_str(my_handle, "dev_id", dev_id, &id_len) != ESP_OK) dev_id[0] = '\0';
+    if (nvs_get_str(my_handle, "dev_key", dev_key, &key_len) != ESP_OK) dev_key[0] = '\0';
+    nvs_close(my_handle);
+    return ESP_OK;
+}
+
 // Event handler for wifi and IP events
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
@@ -231,11 +259,14 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     char mqtt_pass[64] = {0};
     char mqtt_topic[64] = {0};
     char ws_url[128] = {0};
+    char dev_id[128] = {0};
+    char dev_key[128] = {0};
 
     // Read current config
     read_wifi_credentials(ssid, sizeof(ssid), password, sizeof(password));
     read_mqtt_config(mqtt_server, sizeof(mqtt_server), mqtt_port, sizeof(mqtt_port), mqtt_user, sizeof(mqtt_user), mqtt_pass, sizeof(mqtt_pass), mqtt_topic, sizeof(mqtt_topic));
     read_ws_config(ws_url, sizeof(ws_url));
+    read_dev_credentials(dev_id, sizeof(dev_id), dev_key, sizeof(dev_key));
 
     // Substitute placeholders
     std::string html = html_page;
@@ -247,6 +278,8 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     html = replace_placeholder(html, "{{MQTT_PASS}}", mqtt_pass);
     html = replace_placeholder(html, "{{MQTT_TOPIC}}", mqtt_topic);
     html = replace_placeholder(html, "{{WS_URL}}", ws_url);
+    html = replace_placeholder(html, "{{DEV_ID}}", dev_id);
+    html = replace_placeholder(html, "{{DEV_KEY}}", dev_key);
 
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, html.c_str(), html.length());
@@ -289,6 +322,8 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     char mqtt_pass[64] = {0};
     char mqtt_topic[64] = {0};
     char ws_url[128] = {0};
+    char dev_id[128] = {0};
+    char dev_key[128] = {0};
 
     parse_url_param(buf, "ssid", ssid, sizeof(ssid));
     parse_url_param(buf, "password", password, sizeof(password));
@@ -298,14 +333,17 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     parse_url_param(buf, "mqtt_pass", mqtt_pass, sizeof(mqtt_pass));
     parse_url_param(buf, "mqtt_topic", mqtt_topic, sizeof(mqtt_topic));
     parse_url_param(buf, "ws_url", ws_url, sizeof(ws_url));
+    parse_url_param(buf, "dev_id", dev_id, sizeof(dev_id));
+    parse_url_param(buf, "dev_key", dev_key, sizeof(dev_key));
 
     ESP_LOGI(TAG, "Saving configurations...");
 
     esp_err_t err1 = save_wifi_credentials(ssid, password);
     esp_err_t err2 = save_mqtt_config(mqtt_server, mqtt_port, mqtt_user, mqtt_pass, mqtt_topic);
     esp_err_t err3 = save_ws_config(ws_url);
+    esp_err_t err4 = save_dev_credentials(dev_id, dev_key);
 
-    if (err1 != ESP_OK || err2 != ESP_OK || err3 != ESP_OK) {
+    if (err1 != ESP_OK || err2 != ESP_OK || err3 != ESP_OK || err4 != ESP_OK) {
         ESP_LOGE(TAG, "Failed to save configuration to NVS!");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save configuration");
         return ESP_FAIL;
@@ -408,8 +446,11 @@ extern "C" void app_main(void)
     char mqtt_pass[64] = {0};
     char mqtt_topic[64] = {0};
     char ws_url[128] = {0};
+    char dev_id[128] = {0};
+    char dev_key[128] = {0};
     read_mqtt_config(mqtt_server, sizeof(mqtt_server), mqtt_port, sizeof(mqtt_port), mqtt_user, sizeof(mqtt_user), mqtt_pass, sizeof(mqtt_pass), mqtt_topic, sizeof(mqtt_topic));
     read_ws_config(ws_url, sizeof(ws_url));
+    read_dev_credentials(dev_id, sizeof(dev_id), dev_key, sizeof(dev_key));
 
     ESP_LOGI(TAG, "---------------------------------------------");
     ESP_LOGI(TAG, "Loaded Device Configurations from NVS:");
@@ -418,6 +459,8 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "  MQTT Username  : %s", strlen(mqtt_user) > 0 ? mqtt_user : "[Not Set]");
     ESP_LOGI(TAG, "  MQTT Topic     : %s", strlen(mqtt_topic) > 0 ? mqtt_topic : "[Not Set]");
     ESP_LOGI(TAG, "  WebSocket URL  : %s", strlen(ws_url) > 0 ? ws_url : "[Not Set]");
+    ESP_LOGI(TAG, "  Device ID      : %s", strlen(dev_id) > 0 ? dev_id : "[Not Set]");
+    ESP_LOGI(TAG, "  Device KEY     : %s", strlen(dev_key) > 0 ? dev_key : "[Not Set]");
     ESP_LOGI(TAG, "---------------------------------------------");
 
     bool connected = false;
