@@ -225,7 +225,7 @@ static const char* html_page =
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, html_page, HTTPD_RESP_USE_SIZEOF);
+    return httpd_resp_send(req, html_page, HTTPD_RESP_USE_STRLEN);
 }
 
 void restart_task(void *pvParameters) {
