@@ -31,7 +31,6 @@ static int s_retry_num = 0;
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 static char g_dev_id[128] = {0};
 static char g_dev_key[128] = {0};
-static char g_mqtt_topic[256] = {0};
 
 // NVS Helper functions
 esp_err_t save_wifi_credentials(const char* ssid, const char* password) {
@@ -535,8 +534,6 @@ static httpd_handle_t start_webserver(void)
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.max_uri_len = 2048;
-    config.max_hdr_len = 2048;
 
     ESP_LOGI(TAG, "Starting web server on port: %d", config.server_port);
     if (httpd_start(&server, &config) == ESP_OK) {
