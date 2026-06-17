@@ -99,7 +99,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 
 // Helper function to decode URL-encoded string
 void url_decode(char *dst, const char *src) {
-    char a, b;
+    char a = 0, b = 0;
     while (*src) {
         if ((*src == '%') &&
             ((a = src[1]) && (b = src[2])) &&
