@@ -40,7 +40,7 @@ inline void add_device_log(const char* format, ...) {
     uint32_t hour = (uptime / 3600);
 
     char time_str[32];
-    snprintf(time_str, sizeof(time_str), "[%02d:%02d:%02d] ", hour, min, sec);
+    snprintf(time_str, sizeof(time_str), "[%02d:%02d:%02d] ", (int)hour, (int)min, (int)sec);
 
     std::string full_log = std::string(time_str) + log_buf;
 
@@ -118,12 +118,18 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                                 const char *ticket = cJSON_GetStringValue(cJSON_GetObjectItem(data, "ticket"));
                                 const char *counter = cJSON_GetStringValue(cJSON_GetObjectItem(data, "counter"));
                                 const char *service = cJSON_GetStringValue(cJSON_GetObjectItem(data, "service"));
-                                const char *cust_name = cJSON_GetStringValue(cJSON_GetObjectItem(data, "cust_name"));
-                                
-                                add_device_log(">>> CALLING: Ticket=%s, Counter=%s, Service=%s", 
-                                    ticket ? ticket : "N/A", 
-                                    counter ? counter : "N/A", 
-                                    service ? service : "N/A");
+                                if (cust_name) {
+                                    add_device_log(">>> CALLING: Ticket=%s, Counter=%s, Service=%s, Customer=%s", 
+                                        ticket ? ticket : "N/A", 
+                                        counter ? counter : "N/A", 
+                                        service ? service : "N/A",
+                                        cust_name);
+                                } else {
+                                    add_device_log(">>> CALLING: Ticket=%s, Counter=%s, Service=%s", 
+                                        ticket ? ticket : "N/A", 
+                                        counter ? counter : "N/A", 
+                                        service ? service : "N/A");
+                                }
                             }
                         } else if (strcmp(cmd->valuestring, "clear_display") == 0) {
                             add_device_log(">>> COMMAND: Clear screen");
