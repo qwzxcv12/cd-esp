@@ -383,6 +383,7 @@ static esp_err_t log_get_handler(httpd_req_t *req)
 {
     std::string html = log_page;
     html = replace_placeholder(html, "{{DEV_ID}}", g_dev_id);
+    html = replace_placeholder(html, "{{DEV_KEY}}", g_dev_key);
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, html.c_str(), html.length());
 }

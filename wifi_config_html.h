@@ -723,6 +723,29 @@ const char* log_page = R"html(
             border-color: var(--accent);
         }
 
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--muted);
+            font-family: var(--mono);
+            font-size: 10.5px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 6px 12px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s ease;
+            outline: none;
+        }
+        .tab-btn:hover {
+            color: var(--text);
+        }
+        .tab-btn.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+
         .panel__footer {
             padding: 12px 24px;
             display: flex;
@@ -755,18 +778,40 @@ const char* log_page = R"html(
 
         <!-- Ô nhập lệnh gửi trực tiếp -->
         <div class="log-control">
-            <span class="log-control__title">Publish MQTT Message</span>
-            <div class="log-control__row">
-                <input type="text" id="cmdTopic" placeholder="Topic to publish..." style="flex: 1;">
-                <select id="templateSelect" onchange="applyTemplate()">
-                    <option value="">-- Template --</option>
-                    <option value="call">Call Ticket (BH-003)</option>
-                    <option value="clear">Clear Screen</option>
-                </select>
+            <div style="display: flex; border-bottom: 1px solid var(--line); margin-bottom: 6px; gap: 8px;">
+                <button type="button" class="tab-btn active" id="tabKioskBtn" onclick="switchControlTab('kiosk')">Kiosk Sim (Mô Phỏng Kiosk)</button>
+                <button type="button" class="tab-btn" id="tabManualBtn" onclick="switchControlTab('manual')">Manual Publish (Thủ Công)</button>
+                <span id="kioskStatus" style="margin-left: auto; font-family: var(--mono); font-size: 11px; align-self: center; color: var(--muted);">Ready</span>
             </div>
-            <div class="log-control__row">
-                <input type="text" id="cmdPayload" placeholder='JSON Payload e.g. {"cmd":"clear_display"}'>
-                <button class="btn btn--primary" onclick="sendCmd()" style="padding: 10px 20px; border-radius: 4px;">Send</button>
+
+            <!-- Tab 1: Kiosk Simulator -->
+            <div id="kioskControlPanel" style="display: flex; flex-direction: column; gap: 10px;">
+                <div class="log-control__row">
+                    <button class="btn btn--primary" onclick="syncServices()" style="padding: 10px 14px; background-color: var(--accent); color: var(--ink);">📡 1. Đồng bộ dịch vụ</button>
+                    <select id="kioskServiceSelect" style="flex: 1;">
+                        <option value="">-- Vui lòng click Đồng bộ dịch vụ --</option>
+                    </select>
+                </div>
+                <div class="log-control__row">
+                    <input type="text" id="kioskCustName" placeholder="Tên khách hàng (Mặc định: Khách vãng lai)" style="flex: 1;">
+                    <button class="btn btn--primary" onclick="getTicket()" style="padding: 10px 20px; background-color: var(--ok); color: var(--ink);">🎫 2. Lấy số thứ tự</button>
+                </div>
+            </div>
+
+            <!-- Tab 2: Manual Control -->
+            <div id="manualControlPanel" style="display: none; flex-direction: column; gap: 10px;">
+                <div class="log-control__row">
+                    <input type="text" id="cmdTopic" placeholder="Topic to publish..." style="flex: 1;">
+                    <select id="templateSelect" onchange="applyTemplate()">
+                        <option value="">-- Template --</option>
+                        <option value="call">Call Ticket (BH-003)</option>
+                        <option value="clear">Clear Screen</option>
+                    </select>
+                </div>
+                <div class="log-control__row">
+                    <input type="text" id="cmdPayload" placeholder='JSON Payload e.g. {"cmd":"clear_display"}'>
+                    <button class="btn btn--primary" onclick="sendCmd()" style="padding: 10px 20px; border-radius: 4px;">Send</button>
+                </div>
             </div>
         </div>
 
@@ -778,10 +823,135 @@ const char* log_page = R"html(
 
     <script>
         const devId = "{{DEV_ID}}";
+        const devKey = "{{DEV_KEY}}";
+        let servicesList = [];
+
         if (devId) {
             document.getElementById('cmdTopic').value = `qms/display/${devId}/command`;
         } else {
             document.getElementById('cmdTopic').value = "qms/display/command";
+        }
+
+        function switchControlTab(tab) {
+            const kioskPanel = document.getElementById('kioskControlPanel');
+            const manualPanel = document.getElementById('manualControlPanel');
+            const kioskBtn = document.getElementById('tabKioskBtn');
+            const manualBtn = document.getElementById('tabManualBtn');
+            
+            if (tab === 'kiosk') {
+                kioskPanel.style.display = 'flex';
+                manualPanel.style.display = 'none';
+                kioskBtn.classList.add('active');
+                manualBtn.classList.remove('active');
+            } else {
+                kioskPanel.style.display = 'none';
+                manualPanel.style.display = 'flex';
+                kioskBtn.classList.remove('active');
+                manualBtn.classList.add('active');
+            }
+        }
+
+        function syncServices() {
+            if (!devId || !devKey) {
+                alert("Lỗi: Device ID hoặc Device KEY chưa được cấu hình!");
+                return;
+            }
+            const topic = `qms/sender/${devId}/request`;
+            const payload = JSON.stringify({
+                cmd: "get_config",
+                secret_key: devKey
+            });
+            sendMqtt(topic, payload, "Đang đồng bộ dịch vụ...");
+        }
+
+        function getTicket() {
+            const select = document.getElementById('kioskServiceSelect');
+            const serviceId = select.value;
+            if (!serviceId) {
+                alert("Vui lòng chọn hoặc đồng bộ dịch vụ!");
+                return;
+            }
+            
+            const custName = document.getElementById('kioskCustName').value.trim() || "Khách vãng lai";
+            const topic = `qms/sender/${devId}/ticket_request`;
+            const payload = JSON.stringify({
+                service_id: parseInt(serviceId),
+                secret_key: devKey,
+                customer_name: custName
+            });
+            sendMqtt(topic, payload, `Đang gửi yêu cầu lấy số cho dịch vụ ID ${serviceId}...`);
+        }
+
+        function sendMqtt(topic, payload, pendingMsg) {
+            const statusBox = document.getElementById('kioskStatus');
+            statusBox.textContent = pendingMsg;
+            statusBox.style.color = 'var(--accent)';
+            
+            const params = `topic=${encodeURIComponent(topic)}&payload=${encodeURIComponent(payload)}`;
+            fetch('/publish', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: params
+            })
+            .then(res => {
+                if (res.ok) {
+                    statusBox.textContent = "Gửi thành công!";
+                    statusBox.style.color = 'var(--ok)';
+                    setTimeout(fetchLogs, 500);
+                } else {
+                    res.text().then(err => {
+                        statusBox.textContent = "Gửi lỗi: " + err;
+                        statusBox.style.color = '#ff6b6b';
+                    });
+                }
+            })
+            .catch(err => {
+                statusBox.textContent = "Lỗi kết nối: " + err;
+                statusBox.style.color = '#ff6b6b';
+            });
+        }
+
+        function parseServicesFromLog(logData) {
+            // Tìm các JSON init_config
+            const regex = /Payload:\s*(\{.*"cmd"\s*:\s*"init_config".*\})/g;
+            let match;
+            let lastJson = null;
+            
+            while ((match = regex.exec(logData)) !== null) {
+                try {
+                    lastJson = JSON.parse(match[1]);
+                } catch(e) {}
+            }
+            
+            if (lastJson && lastJson.services) {
+                updateServiceDropdown(lastJson.services);
+            }
+        }
+        
+        function updateServiceDropdown(services) {
+            const select = document.getElementById('kioskServiceSelect');
+            const newKeys = services.map(s => `${s.id}:${s.name}`).join('|');
+            const oldKeys = servicesList.map(s => `${s.id}:${s.name}`).join('|');
+            if (newKeys === oldKeys) return;
+            
+            servicesList = services;
+            const currentValue = select.value;
+            
+            select.innerHTML = '<option value="">-- Chọn dịch vụ --</option>';
+            services.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.id;
+                opt.textContent = `${s.name} (ID: ${s.id})`;
+                select.appendChild(opt);
+            });
+            
+            if (currentValue) {
+                select.value = currentValue;
+            }
+            
+            const statusBox = document.getElementById('kioskStatus');
+            statusBox.textContent = `Đã đồng bộ ${services.length} dịch vụ!`;
+            statusBox.style.color = 'var(--ok)';
         }
 
         function applyTemplate() {
@@ -810,6 +980,7 @@ const char* log_page = R"html(
                 .then(data => {
                     logBox.textContent = data ? data : "No logs available.";
                     logBox.scrollTop = logBox.scrollHeight;
+                    parseServicesFromLog(data);
                 })
                 .catch(err => {
                     logBox.textContent = "Error loading logs from device: " + err;
@@ -823,24 +994,7 @@ const char* log_page = R"html(
                 alert("Please enter both topic and payload.");
                 return;
             }
-            
-            const params = `topic=${encodeURIComponent(topic)}&payload=${encodeURIComponent(payload)}`;
-            fetch('/publish', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: params
-            })
-            .then(res => {
-                if (res.ok) {
-                    alert("Message published successfully!");
-                    document.getElementById('cmdPayload').value = '';
-                    document.getElementById('templateSelect').value = '';
-                    fetchLogs();
-                } else {
-                    res.text().then(err => alert("Failed to publish: " + err));
-                }
-            })
-            .catch(err => alert("Error sending command: " + err));
+            sendMqtt(topic, payload, "Publishing manually...");
         }
         
         fetchLogs();
