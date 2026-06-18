@@ -14,6 +14,8 @@
 #include "esp_netif.h"
 #include "esp_http_server.h"
 #include "esp_system.h"
+#include "lwip/sockets.h"
+#include "lwip/netdb.h"
 #include "wifi_config_html.h"
 #include "Arduino.h"
 #include "led_display.h"
@@ -540,6 +542,45 @@ static httpd_handle_t start_webserver(void)
     return NULL;
 }
 
+void test_internet_task(void *pvParameters) {
+    vTaskDelay(pdMS_TO_TICKS(5000)); // Wait 5 seconds after IP connection
+    add_device_log("[DNS Test] Resolving google.com...");
+    struct addrinfo hints = {};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = NULL;
+    int err = getaddrinfo("google.com", "80", &hints, &res);
+    if (err != 0 || res == NULL) {
+        add_device_log("[DNS Test] FAILED to resolve google.com (err=%d)", err);
+    } else {
+        struct sockaddr_in *addr = (struct sockaddr_in *)res->ai_addr;
+        char ip_str[32];
+        inet_ntop(AF_INET, &addr->sin_addr, ip_str, sizeof(ip_str));
+        add_device_log("[DNS Test] SUCCESS: google.com resolved to %s", ip_str);
+        
+        // Try TCP connect
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock >= 0) {
+            struct timeval tv;
+            tv.tv_sec = 3;
+            tv.tv_usec = 0;
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+            
+            add_device_log("[TCP Test] Connecting to google.com:80...");
+            int conn_err = connect(sock, res->ai_addr, res->ai_addrlen);
+            if (conn_err == 0) {
+                add_device_log("[TCP Test] SUCCESS: Connected to google.com:80!");
+            } else {
+                add_device_log("[TCP Test] FAILED to connect to google.com:80 (errno=%d)", errno);
+            }
+            close(sock);
+        }
+        freeaddrinfo(res);
+    }
+    vTaskDelete(NULL);
+}
+
 extern "C" void app_main(void)
 {
     // Initialize Arduino Core
@@ -672,6 +713,9 @@ extern "C" void app_main(void)
     } else {
         add_device_log("Starting Web Server in Station mode...");
         start_webserver();
+
+        // Start internet test task
+        xTaskCreate(test_internet_task, "net_check", 4096, NULL, 5, NULL);
 
         // Start MQTT client if broker is configured
         if (strlen(mqtt_server) > 0) {

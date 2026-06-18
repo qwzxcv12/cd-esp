@@ -68,6 +68,13 @@ inline void clean_broker_host(char* dst, const char* src, size_t dst_len) {
     dst[i] = '\0';
 }
 
+inline bool is_secure_broker(const char* src) {
+    if (strstr(src, "https://") == src || strstr(src, "mqtts://") == src || strstr(src, "wss://") == src || strstr(src, "ssl://") == src) {
+        return true;
+    }
+    return false;
+}
+
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
@@ -213,15 +220,21 @@ inline void mqtt_app_start(const char* broker, int port, const char* user, const
 {
     char clean_host[128] = {0};
     clean_broker_host(clean_host, broker, sizeof(clean_host));
+    bool secure = is_secure_broker(broker);
     
     // Copy topic to global variable for subscribe when connected
     strncpy(g_mqtt_topic, topic, sizeof(g_mqtt_topic) - 1);
     g_mqtt_topic[sizeof(g_mqtt_topic) - 1] = '\0';
 
-    add_device_log("Starting MQTT Client to %s:%d (User: %s, Topics: %s)", clean_host, port, strlen(user) > 0 ? user : "None", g_mqtt_topic);
+    add_device_log("Starting MQTT Client to %s:%d (Secure: %s, User: %s, Topics: %s)", 
+                   clean_host, port, secure ? "Yes" : "No", strlen(user) > 0 ? user : "None", g_mqtt_topic);
 
     char uri[256];
-    snprintf(uri, sizeof(uri), "mqtt://%s:%d", clean_host, port);
+    if (secure) {
+        snprintf(uri, sizeof(uri), "mqtts://%s:%d", clean_host, port);
+    } else {
+        snprintf(uri, sizeof(uri), "mqtt://%s:%d", clean_host, port);
+    }
 
     esp_mqtt_client_config_t mqtt_cfg = {};
     mqtt_cfg.broker.address.uri = uri;
@@ -232,6 +245,10 @@ inline void mqtt_app_start(const char* broker, int port, const char* user, const
         mqtt_cfg.credentials.authentication.password = pass;
     }
     mqtt_cfg.network.reconnect_timeout_ms = 5000;
+
+    if (secure) {
+        mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
+    }
 
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
     esp_mqtt_client_register_event(mqtt_client, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
