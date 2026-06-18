@@ -460,7 +460,8 @@ inline void setup_led_display() {
   u8g2Fonts.print("LED Ready");
   
   xTaskCreate(led_display_task, "led_display_task", 4096, NULL, 5, NULL);
-  xTaskCreate(serial_command_task, "serial_command_task", 4096, NULL, 5, NULL);
+  // serial_command_task disabled - use web UI for testing instead
+  // xTaskCreate(serial_command_task, "serial_command_task", 4096, NULL, 5, NULL);
 }
 
 #endif // LED_DISPLAY_H
