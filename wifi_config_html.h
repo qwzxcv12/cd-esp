@@ -25,9 +25,9 @@ const char* html_page = R"html(
             font-family: var(--sans);
             background-color: var(--ink);
             background-image:
-                linear-gradient(90deg, rgba(255, 180, 84, 0.05) 1px, transparent 1px),
-                linear-gradient(rgba(255, 180, 84, 0.05) 1px, transparent 1px),
-                radial-gradient(circle, rgba(255, 180, 84, 0.14) 1.4px, transparent 1.4px);
+                linear-gradient(90deg, rgba(255, 180, 84, 0.04) 1px, transparent 1px),
+                linear-gradient(rgba(255, 180, 84, 0.04) 1px, transparent 1px),
+                radial-gradient(circle, rgba(255, 180, 84, 0.12) 1.4px, transparent 1.4px);
             background-size: 56px 56px, 56px 56px, 56px 56px;
             background-position: 0 0, 0 0, 28px 28px;
             color: var(--text);
@@ -39,8 +39,8 @@ const char* html_page = R"html(
             padding: 24px 0;
         }
         .panel {
-            width: 400px;
-            max-width: 92%;
+            width: 440px;
+            max-width: 95%;
             background: var(--panel);
             border: 1px solid var(--line);
             border-top: 2px solid var(--accent);
@@ -109,9 +109,37 @@ const char* html_page = R"html(
             0%, 100% { opacity: 1; }
             50% { opacity: 0.35; }
         }
-        @media (prefers-reduced-motion: reduce) {
-            .status-dot { animation: none; }
+        
+        /* Navigation Bar */
+        .panel__nav {
+            display: flex;
+            border-bottom: 1px solid var(--line);
+            background: rgba(0, 0, 0, 0.25);
         }
+        .nav-item {
+            flex: 1;
+            text-align: center;
+            padding: 14px;
+            font-family: var(--mono);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--muted);
+            text-decoration: none;
+            transition: all 0.15s ease;
+            border-bottom: 2px solid transparent;
+        }
+        .nav-item:hover {
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .nav-item.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+            background: rgba(255, 255, 255, 0.04);
+        }
+
         form {
             padding: 4px 24px 24px;
         }
@@ -176,6 +204,110 @@ const char* html_page = R"html(
             border-color: var(--accent);
             box-shadow: 0 0 0 3px var(--accent-dim);
         }
+
+        /* Dropdown Multi-select styles */
+        .dropdown-multi {
+            position: relative;
+            width: 100%;
+        }
+        .dropdown-multi__selected {
+            width: 100%;
+            padding: 10px 12px;
+            font-family: var(--mono);
+            font-size: 13px;
+            color: var(--text);
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid var(--line);
+            border-radius: 5px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .dropdown-multi__selected:focus-within {
+            border-color: var(--accent);
+        }
+        .arrow-icon {
+            width: 16px;
+            height: 16px;
+            transition: transform 0.2s;
+            color: var(--muted);
+        }
+        .dropdown-multi.open .arrow-icon {
+            transform: rotate(180deg);
+        }
+        .dropdown-multi__options {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-top: none;
+            border-radius: 0 0 5px 5px;
+            z-index: 10;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            padding: 8px;
+        }
+        .dropdown-multi.open .dropdown-multi__options {
+            display: block;
+        }
+        .dropdown-multi__list {
+            max-height: 150px;
+            overflow-y: auto;
+            margin-bottom: 8px;
+        }
+        .dropdown-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            cursor: pointer;
+            font-family: var(--mono);
+            font-size: 12px;
+            border-radius: 4px;
+            transition: background 0.1s;
+        }
+        .dropdown-option:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .dropdown-option input[type="checkbox"] {
+            cursor: pointer;
+            accent-color: var(--accent);
+        }
+        .dropdown-multi__add {
+            display: flex;
+            gap: 6px;
+            border-top: 1px solid var(--line);
+            padding-top: 8px;
+        }
+        .dropdown-multi__add input {
+            flex: 1;
+            padding: 6px 8px;
+            font-family: var(--mono);
+            font-size: 11px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            color: var(--text);
+            outline: none;
+        }
+        .dropdown-multi__add button {
+            padding: 6px 12px;
+            font-family: var(--mono);
+            font-size: 11px;
+            font-weight: bold;
+            background: var(--accent);
+            color: var(--ink);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .dropdown-multi__add button:hover {
+            background: #ffc578;
+        }
+
         .submit {
             width: 100%;
             margin-top: 22px;
@@ -194,10 +326,6 @@ const char* html_page = R"html(
         }
         .submit:hover { background: #ffc578; }
         .submit:active { transform: translateY(1px); }
-        .submit:focus-visible {
-            outline: 2px solid var(--accent);
-            outline-offset: 3px;
-        }
         .footnote {
             margin-top: 14px;
             text-align: center;
@@ -223,9 +351,14 @@ const char* html_page = R"html(
             <div class="panel__heading">
                 <div class="device-id">ESP32 &middot; SoC</div>
                 <h2>Device Configuration</h2>
-                <p class="subtitle">Set the network, broker, and socket endpoint this unit will use after it reboots.</p>
+                <p class="subtitle">Set the network and broker parameters.</p>
             </div>
-            <div class="status"><span class="status-dot"></span>AP MODE</div>
+            <div class="status"><span class="status-dot"></span>Active</div>
+        </div>
+
+        <div class="panel__nav">
+            <a href="/" class="nav-item active">Configuration</a>
+            <a href="/log" class="nav-item">System Logs</a>
         </div>
 
         <form action="/config" method="POST">
@@ -265,9 +398,27 @@ const char* html_page = R"html(
                     <label for="mqtt_pass">Broker password</label>
                     <input type="password" id="mqtt_pass" name="mqtt_pass" placeholder="301258" value="{{MQTT_PASS}}">
                 </div>
+                
+                <!-- Dropdown Đa Chọn Topic -->
                 <div class="field">
-                    <label for="mqtt_topic">Topic</label>
-                    <input type="text" id="mqtt_topic" name="mqtt_topic" placeholder="qms/display" value="{{MQTT_TOPIC}}">
+                    <label>Topics (Select one or more)</label>
+                    <div class="dropdown-multi">
+                        <div class="dropdown-multi__selected" onclick="toggleDropdown(event)">
+                            <span id="selectedTopicsText">Select Topics...</span>
+                            <svg class="arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                        </div>
+                        <div class="dropdown-multi__options" id="dropdownOptions">
+                            <div class="dropdown-multi__list" id="topicsList">
+                                <!-- Option Rendered via JS -->
+                            </div>
+                            <div class="dropdown-multi__add" onclick="event.stopPropagation()">
+                                <input type="text" id="newTopicInput" placeholder="Add custom topic...">
+                                <button type="button" onclick="addCustomTopic(event)">Add</button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Hidden input gửi lên Server -->
+                    <input type="hidden" id="mqtt_topic" name="mqtt_topic" value="{{MQTT_TOPIC}}">
                 </div>
             </div>
 
@@ -301,6 +452,95 @@ const char* html_page = R"html(
             <div class="footnote">Settings are written to flash and applied on reboot.<br><strong>Antigravity ESP-IDF Manager</strong></div>
         </form>
     </div>
+
+    <script>
+        let selectedTopics = [];
+        const defaultTopics = ["qms/sender", "qms/display"];
+
+        // Đọc giá trị từ hidden input backend
+        const initialVal = document.getElementById('mqtt_topic').value;
+        if (initialVal) {
+            selectedTopics = initialVal.split(',').map(t => t.trim()).filter(t => t.length > 0);
+        }
+
+        // Tạo tập các topic hiển thị
+        let allTopics = [...new Set([...defaultTopics, ...selectedTopics])];
+
+        function renderTopics() {
+            const list = document.getElementById('topicsList');
+            list.innerHTML = '';
+            allTopics.forEach(topic => {
+                const checked = selectedTopics.includes(topic) ? 'checked' : '';
+                const option = document.createElement('div');
+                option.className = 'dropdown-option';
+                option.onclick = (e) => {
+                    const chk = document.getElementById('chk_' + topic);
+                    if (e.target !== chk) {
+                        chk.checked = !chk.checked;
+                        onTopicChange(chk);
+                    }
+                };
+                option.innerHTML = `
+                    <input type="checkbox" id="chk_${topic}" value="${topic}" ${checked} onclick="event.stopPropagation(); onTopicChange(this)">
+                    <label style="flex:1; margin:0; cursor:pointer;">${topic}</label>
+                `;
+                list.appendChild(option);
+            });
+            updateSelectedText();
+        }
+
+        function onTopicChange(checkbox) {
+            const val = checkbox.value;
+            if (checkbox.checked) {
+                if (!selectedTopics.includes(val)) {
+                    selectedTopics.push(val);
+                }
+            } else {
+                selectedTopics = selectedTopics.filter(t => t !== val);
+            }
+            document.getElementById('mqtt_topic').value = selectedTopics.join(',');
+            updateSelectedText();
+        }
+
+        function updateSelectedText() {
+            const textEl = document.getElementById('selectedTopicsText');
+            if (selectedTopics.length === 0) {
+                textEl.textContent = 'Select Topics...';
+                textEl.style.color = 'var(--muted)';
+            } else {
+                textEl.textContent = selectedTopics.join(', ');
+                textEl.style.color = 'var(--text)';
+            }
+        }
+
+        function toggleDropdown(event) {
+            event.stopPropagation();
+            const wrapper = document.querySelector('.dropdown-multi');
+            wrapper.classList.toggle('open');
+        }
+
+        function addCustomTopic(event) {
+            event.stopPropagation();
+            const input = document.getElementById('newTopicInput');
+            const newTopic = input.value.trim();
+            if (newTopic && !allTopics.includes(newTopic)) {
+                allTopics.push(newTopic);
+                selectedTopics.push(newTopic);
+                document.getElementById('mqtt_topic').value = selectedTopics.join(',');
+                renderTopics();
+                input.value = '';
+            }
+        }
+
+        document.addEventListener('click', function(e) {
+            const dropdown = document.querySelector('.dropdown-multi');
+            if (dropdown && !dropdown.contains(e.target)) {
+                dropdown.classList.remove('open');
+            }
+        });
+
+        renderTopics();
+    </script>
 </body>
 </html>
 )html";
@@ -318,8 +558,9 @@ const char* log_page = R"html(
             --line: #232b35;
             --text: #e6edf3;
             --muted: #6b7785;
-            --accent: #5ec98f;
-            --accent-dim: rgba(94, 201, 143, 0.16);
+            --accent: #ffb454;
+            --accent-dim: rgba(255, 180, 84, 0.16);
+            --ok: #5ec98f;
             --mono: ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace;
             --sans: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
         }
@@ -328,9 +569,11 @@ const char* log_page = R"html(
             font-family: var(--sans);
             background-color: var(--ink);
             background-image:
-                linear-gradient(90deg, rgba(94, 201, 143, 0.03) 1px, transparent 1px),
-                linear-gradient(rgba(94, 201, 143, 0.03) 1px, transparent 1px);
-            background-size: 40px 40px;
+                linear-gradient(90deg, rgba(255, 180, 84, 0.04) 1px, transparent 1px),
+                linear-gradient(rgba(255, 180, 84, 0.04) 1px, transparent 1px),
+                radial-gradient(circle, rgba(255, 180, 84, 0.12) 1.4px, transparent 1.4px);
+            background-size: 56px 56px, 56px 56px, 56px 56px;
+            background-position: 0 0, 0 0, 28px 28px;
             color: var(--text);
             display: flex;
             justify-content: center;
@@ -349,7 +592,7 @@ const char* log_page = R"html(
             box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
             display: flex;
             flex-direction: column;
-            height: 85vh;
+            height: 90vh;
         }
         .panel__header {
             padding: 18px 24px;
@@ -364,6 +607,37 @@ const char* log_page = R"html(
             font-weight: 600;
             color: var(--text);
         }
+        
+        /* Navigation Bar */
+        .panel__nav {
+            display: flex;
+            border-bottom: 1px solid var(--line);
+            background: rgba(0, 0, 0, 0.25);
+        }
+        .nav-item {
+            flex: 1;
+            text-align: center;
+            padding: 14px;
+            font-family: var(--mono);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--muted);
+            text-decoration: none;
+            transition: all 0.15s ease;
+            border-bottom: 2px solid transparent;
+        }
+        .nav-item:hover {
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .nav-item.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+            background: rgba(255, 255, 255, 0.04);
+        }
+
         .btn {
             display: inline-flex;
             align-items: center;
@@ -384,16 +658,8 @@ const char* log_page = R"html(
             color: var(--ink);
             border: none;
         }
-        .btn--primary:hover { background: #7ff2b0; }
-        .btn--outline {
-            background: transparent;
-            color: var(--muted);
-            border: 1px solid var(--line);
-        }
-        .btn--outline:hover {
-            color: var(--text);
-            border-color: var(--muted);
-        }
+        .btn--primary:hover { background: #ffc578; }
+        
         .log-container {
             flex: 1;
             padding: 20px;
@@ -402,10 +668,61 @@ const char* log_page = R"html(
             font-family: var(--mono);
             font-size: 12.5px;
             line-height: 1.6;
-            color: #8cd6c5;
+            color: #ffb454;
             white-space: pre-wrap;
             border-bottom: 1px solid var(--line);
         }
+        
+        /* Log Console Control */
+        .log-control {
+            padding: 16px 20px;
+            background: rgba(0, 0, 0, 0.25);
+            border-top: 1px solid var(--line);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .log-control__title {
+            font-family: var(--mono);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+        .log-control__row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .log-control__row input[type="text"] {
+            flex: 1;
+            padding: 9px 12px;
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--text);
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            outline: none;
+        }
+        .log-control__row input[type="text"]:focus {
+            border-color: var(--accent);
+        }
+        .log-control__row select {
+            padding: 9px 12px;
+            font-family: var(--mono);
+            font-size: 12px;
+            color: var(--text);
+            background: var(--ink);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            outline: none;
+            cursor: pointer;
+        }
+        .log-control__row select:focus {
+            border-color: var(--accent);
+        }
+
         .panel__footer {
             padding: 12px 24px;
             display: flex;
@@ -423,20 +740,69 @@ const char* log_page = R"html(
 <body>
     <div class="panel">
         <div class="panel__header">
-            <h2>Device System Logs</h2>
+            <h2>Device Logs &amp; Diagnostics</h2>
             <div style="display: flex; gap: 8px;">
                 <button class="btn btn--primary" onclick="fetchLogs()">Refresh</button>
-                <a href="/" class="btn btn--outline">Configuration</a>
             </div>
         </div>
+
+        <div class="panel__nav">
+            <a href="/" class="nav-item">Configuration</a>
+            <a href="/log" class="nav-item active">System Logs</a>
+        </div>
+
         <div class="log-container" id="logBox">Loading device logs...</div>
+
+        <!-- Ô nhập lệnh gửi trực tiếp -->
+        <div class="log-control">
+            <span class="log-control__title">Publish MQTT Message</span>
+            <div class="log-control__row">
+                <input type="text" id="cmdTopic" placeholder="Topic to publish..." style="flex: 1;">
+                <select id="templateSelect" onchange="applyTemplate()">
+                    <option value="">-- Template --</option>
+                    <option value="call">Call Ticket (BH-003)</option>
+                    <option value="clear">Clear Screen</option>
+                </select>
+            </div>
+            <div class="log-control__row">
+                <input type="text" id="cmdPayload" placeholder='JSON Payload e.g. {"cmd":"clear_display"}'>
+                <button class="btn btn--primary" onclick="sendCmd()" style="padding: 10px 20px; border-radius: 4px;">Send</button>
+            </div>
+        </div>
+
         <div class="panel__footer">
-            <span class="status">Realtime log display</span>
-            <span class="status" style="color: var(--accent);">Active</span>
+            <span class="status">Realtime logs (auto-refresh 5s)</span>
+            <span class="status" style="color: var(--ok);">Active</span>
         </div>
     </div>
 
     <script>
+        const devId = "{{DEV_ID}}";
+        if (devId) {
+            document.getElementById('cmdTopic').value = `qms/display/${devId}/command`;
+        } else {
+            document.getElementById('cmdTopic').value = "qms/display/command";
+        }
+
+        function applyTemplate() {
+            const select = document.getElementById('templateSelect');
+            const payloadInput = document.getElementById('cmdPayload');
+            if (select.value === 'call') {
+                payloadInput.value = JSON.stringify({
+                    cmd: "display_ticket",
+                    data: {
+                        ticket: "BH-003",
+                        service: "Cấp thẻ Bảo hiểm y tế",
+                        counter: "Quầy số 03",
+                        status: "CALLING",
+                        cust_name: "Nguyễn Văn A"
+                    }
+                });
+            } else if (select.value === 'clear') {
+                payloadInput.value = JSON.stringify({ cmd: "clear_display" });
+            }
+        }
+
         function fetchLogs() {
             const logBox = document.getElementById('logBox');
             fetch('/log_data')
@@ -448,6 +814,33 @@ const char* log_page = R"html(
                 .catch(err => {
                     logBox.textContent = "Error loading logs from device: " + err;
                 });
+        }
+        
+        function sendCmd() {
+            const topic = document.getElementById('cmdTopic').value.trim();
+            const payload = document.getElementById('cmdPayload').value.trim();
+            if (!topic || !payload) {
+                alert("Please enter both topic and payload.");
+                return;
+            }
+            
+            const params = `topic=${encodeURIComponent(topic)}&payload=${encodeURIComponent(payload)}`;
+            fetch('/publish', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: params
+            })
+            .then(res => {
+                if (res.ok) {
+                    alert("Message published successfully!");
+                    document.getElementById('cmdPayload').value = '';
+                    document.getElementById('templateSelect').value = '';
+                    fetchLogs();
+                } else {
+                    res.text().then(err => alert("Failed to publish: " + err));
+                }
+            })
+            .catch(err => alert("Error sending command: " + err));
         }
         
         fetchLogs();

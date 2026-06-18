@@ -22,6 +22,7 @@ inline std::mutex g_log_mutex;
 inline esp_mqtt_client_handle_t mqtt_client = NULL;
 inline char g_dev_id[128] = {0};
 inline char g_dev_key[128] = {0};
+inline char g_mqtt_topic[256] = {0};
 
 static const char *MQTT_TAG = "mqtt_qms";
 
@@ -75,11 +76,37 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED:
         add_device_log("MQTT CONNECTED to broker!");
-        if (strlen(g_dev_id) > 0) {
-            char sub_topic[256];
-            snprintf(sub_topic, sizeof(sub_topic), "qms/display/%s/command", g_dev_id);
-            int msg_id = esp_mqtt_client_subscribe(client, sub_topic, 1);
-            add_device_log("Subscribed to: %s (msg_id=%d)", sub_topic, msg_id);
+        if (strlen(g_mqtt_topic) > 0) {
+            char topic_buf[256];
+            strncpy(topic_buf, g_mqtt_topic, sizeof(topic_buf) - 1);
+            topic_buf[sizeof(topic_buf) - 1] = '\0';
+            
+            char *token = strtok(topic_buf, ",");
+            while (token != NULL) {
+                // Trim leading spaces
+                while (*token == ' ') token++;
+                // Trim trailing spaces
+                size_t len = strlen(token);
+                while (len > 0 && token[len - 1] == ' ') {
+                    token[len - 1] = '\0';
+                    len--;
+                }
+
+                if (strlen(token) > 0) {
+                    // Subscribe to base topic
+                    int msg_id1 = esp_mqtt_client_subscribe(client, token, 1);
+                    add_device_log("Subscribed to base: %s (msg_id=%d)", token, msg_id1);
+                    
+                    // Subscribe to device command topic
+                    if (strlen(g_dev_id) > 0) {
+                        char dev_topic[320];
+                        snprintf(dev_topic, sizeof(dev_topic), "%s/%s/command", token, g_dev_id);
+                        int msg_id2 = esp_mqtt_client_subscribe(client, dev_topic, 1);
+                        add_device_log("Subscribed to dev: %s (msg_id=%d)", dev_topic, msg_id2);
+                    }
+                }
+                token = strtok(NULL, ",");
+            }
         }
         break;
 
@@ -173,12 +200,16 @@ static void mqtt_heartbeat_task(void *pvParameters)
     }
 }
 
-inline void mqtt_app_start(const char* broker, int port, const char* user, const char* pass)
+inline void mqtt_app_start(const char* broker, int port, const char* user, const char* pass, const char* topic)
 {
     char clean_host[128] = {0};
     clean_broker_host(clean_host, broker, sizeof(clean_host));
+    
+    // Copy topic to global variable for subscribe when connected
+    strncpy(g_mqtt_topic, topic, sizeof(g_mqtt_topic) - 1);
+    g_mqtt_topic[sizeof(g_mqtt_topic) - 1] = '\0';
 
-    add_device_log("Starting MQTT Client to %s:%d (User: %s)", clean_host, port, strlen(user) > 0 ? user : "None");
+    add_device_log("Starting MQTT Client to %s:%d (User: %s, Topics: %s)", clean_host, port, strlen(user) > 0 ? user : "None", g_mqtt_topic);
 
     char uri[256];
     snprintf(uri, sizeof(uri), "mqtt://%s:%d", clean_host, port);

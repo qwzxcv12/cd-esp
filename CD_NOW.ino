@@ -379,8 +379,10 @@ static esp_err_t config_post_handler(httpd_req_t *req)
 
 static esp_err_t log_get_handler(httpd_req_t *req)
 {
+    std::string html = log_page;
+    html = replace_placeholder(html, "{{DEV_ID}}", g_dev_id);
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, log_page, strlen(log_page));
+    return httpd_resp_send(req, html.c_str(), html.length());
 }
 
 static esp_err_t log_data_get_handler(httpd_req_t *req)
@@ -394,6 +396,52 @@ static esp_err_t log_data_get_handler(httpd_req_t *req)
     }
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
     return httpd_resp_send(req, all_logs.c_str(), all_logs.length());
+}
+
+static esp_err_t publish_post_handler(httpd_req_t *req)
+{
+    char buf[1024];
+    int ret, remaining = req->content_len;
+
+    if (remaining >= sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Payload too long");
+        return ESP_FAIL;
+    }
+
+    int cur_len = 0;
+    while (remaining > 0) {
+        if ((ret = httpd_req_recv(req, buf + cur_len, remaining)) <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            return ESP_FAIL;
+        }
+        cur_len += ret;
+        remaining -= ret;
+    }
+    buf[cur_len] = '\0';
+
+    char topic[256] = {0};
+    char payload[512] = {0};
+
+    parse_url_param(buf, "topic", topic, sizeof(topic));
+    parse_url_param(buf, "payload", payload, sizeof(payload));
+
+    if (strlen(topic) > 0 && strlen(payload) > 0) {
+        if (mqtt_client) {
+            int msg_id = esp_mqtt_client_publish(mqtt_client, topic, payload, 0, 1, 0);
+            add_device_log("Web Publish: Topic='%s', MsgID=%d, Payload='%s'", topic, msg_id, payload);
+            httpd_resp_sendstr(req, "SUCCESS");
+            return ESP_OK;
+        } else {
+            add_device_log("Web Publish Failed: MQTT client not connected.");
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "MQTT client not initialized or connected");
+            return ESP_FAIL;
+        }
+    }
+
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing topic or payload");
+    return ESP_FAIL;
 }
 
 static httpd_handle_t start_webserver(void)
@@ -435,6 +483,14 @@ static httpd_handle_t start_webserver(void)
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &log_data_get);
+
+        httpd_uri_t publish_post = {
+            .uri       = "/publish",
+            .method    = HTTP_POST,
+            .handler   = publish_post_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &publish_post);
 
         return server;
     }
@@ -580,7 +636,7 @@ extern "C" void app_main(void)
             if (strlen(mqtt_port) > 0) {
                 port = atoi(mqtt_port);
             }
-            mqtt_app_start(mqtt_server, port, mqtt_user, mqtt_pass);
+            mqtt_app_start(mqtt_server, port, mqtt_user, mqtt_pass, mqtt_topic);
         } else {
             add_device_log("MQTT Broker not configured. Skipping MQTT connection.");
         }
