@@ -787,14 +787,14 @@ const char* log_page = R"html(
             <!-- Tab 1: Kiosk Simulator -->
             <div id="kioskControlPanel" style="display: flex; flex-direction: column; gap: 10px;">
                 <div class="log-control__row">
-                    <button class="btn btn--primary" onclick="syncServices()" style="padding: 10px 14px; background-color: var(--accent); color: var(--ink);">📡 1. Sync Services</button>
+                    <button class="btn btn--primary" onclick="syncServices()" style="padding: 10px 14px; background-color: var(--accent); color: var(--ink);">1. Sync Services</button>
                     <select id="kioskServiceSelect" style="flex: 1;">
                         <option value="">-- Please click Sync Services --</option>
                     </select>
                 </div>
                 <div class="log-control__row">
                     <input type="text" id="kioskCustName" placeholder="Customer Name (Default: Guest)" style="flex: 1;">
-                    <button class="btn btn--primary" onclick="getTicket()" style="padding: 10px 20px; background-color: var(--ok); color: var(--ink);">🎫 2. Get Ticket</button>
+                    <button class="btn btn--primary" onclick="getTicket()" style="padding: 10px 20px; background-color: var(--ok); color: var(--ink);">2. Get Ticket</button>
                 </div>
             </div>
 
