@@ -544,7 +544,6 @@ extern "C" void app_main(void)
 {
     // Initialize Arduino Core
     initArduino();
-    Serial.begin(115200);
 
     // Initialize NVS
     esp_err_t ret = nvs_flash_init();

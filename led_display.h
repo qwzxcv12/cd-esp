@@ -414,8 +414,8 @@ inline void serial_command_task(void *pvParameters) {
   char buffer[256];
   int idx = 0;
   while (1) {
-    while (Serial.available() > 0) {
-      char c = Serial.read();
+    int c = getchar();
+    if (c != EOF && c != 0xFF && c != 0) {
       if (c == '\n' || c == '\r') {
         if (idx > 0) {
           buffer[idx] = '\0';
@@ -426,10 +426,11 @@ inline void serial_command_task(void *pvParameters) {
           idx = 0;
         }
       } else if (idx < sizeof(buffer) - 1) {
-        buffer[idx++] = c;
+        buffer[idx++] = (char)c;
       }
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(50));
     }
-    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
