@@ -623,6 +623,8 @@ static esp_err_t login_post_handler(httpd_req_t *req)
     }
 }
 
+static httpd_handle_t s_webserver_handle = NULL;
+
 static httpd_handle_t start_webserver(void)
 {
     httpd_handle_t server = NULL;
@@ -632,6 +634,7 @@ static httpd_handle_t start_webserver(void)
 
     ESP_LOGI(TAG, "Starting web server on port: %d", config.server_port);
     if (httpd_start(&server, &config) == ESP_OK) {
+        s_webserver_handle = server;
         httpd_uri_t root = {
             .uri       = "/",
             .method    = HTTP_GET,
@@ -707,6 +710,16 @@ static void startup_display_timeout_task(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(30000));
     show_startup_messages = false;
     processMessage("clear");
+    vTaskDelete(NULL);
+}
+
+static void webserver_timeout_task(void *pvParameters) {
+    vTaskDelay(pdMS_TO_TICKS(15 * 60 * 1000)); // 15 minutes
+    if (s_webserver_handle != NULL) {
+        add_device_log("Web server timeout (15 mins). Shutting down web server for security.");
+        httpd_stop(s_webserver_handle);
+        s_webserver_handle = NULL;
+    }
     vTaskDelete(NULL);
 }
 
@@ -864,5 +877,9 @@ extern "C" void app_main(void)
         } else {
             add_device_log("MQTT Broker not configured. Skipping MQTT connection.");
         }
+    }
+
+    if (s_webserver_handle != NULL) {
+        xTaskCreate(webserver_timeout_task, "webserver_timeout", 2048, NULL, 5, NULL);
     }
 }
