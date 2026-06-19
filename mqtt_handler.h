@@ -76,6 +76,10 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED:
         add_device_log("MQTT CONNECTED to broker!");
+        if (show_startup_messages) {
+            extern void processMessage(const char* command);
+            processMessage("xanh MQTT Connected");
+        }
         if (strlen(g_mqtt_topic) > 0) {
             char topic_buf[256];
             strncpy(topic_buf, g_mqtt_topic, sizeof(topic_buf) - 1);
@@ -112,6 +116,10 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
     case MQTT_EVENT_DISCONNECTED:
         add_device_log("MQTT DISCONNECTED. Reconnecting...");
+        if (show_startup_messages) {
+            extern void processMessage(const char* command);
+            processMessage("cam MQTT Disconn");
+        }
         break;
 
     case MQTT_EVENT_SUBSCRIBED:
@@ -190,6 +198,10 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
     case MQTT_EVENT_ERROR:
         add_device_log("MQTT Error occurred");
+        if (show_startup_messages) {
+            extern void processMessage(const char* command);
+            processMessage("do MQTT Error");
+        }
         break;
 
     default:

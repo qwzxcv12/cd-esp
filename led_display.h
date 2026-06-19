@@ -43,6 +43,7 @@ inline U8G2_FOR_ADAFRUIT_GFX u8g2Fonts;
 inline char textToDisplay[250] = "Ready"; 
 inline uint16_t textColor = 0xFFFF;    // Default white
 inline bool needRedraw = true;
+inline bool show_startup_messages = true;
 
 // Scrolling variables
 inline bool isScrolling = false;
