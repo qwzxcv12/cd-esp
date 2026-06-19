@@ -90,6 +90,9 @@ inline const uint8_t* VIETNAMESE_FONT = u8g2_font_unifont_t_vietnamese1;
 
 // Analyze content type
 inline ContentType analyzeContentType(const char* text) {
+  if (strstr(text, "IP:") != nullptr || strstr(text, "WiFi") != nullptr || strstr(text, "AP:") != nullptr) {
+    return ONLY_TEXT;
+  }
   bool hasDigits = false;
   bool hasNonDigits = false;
   

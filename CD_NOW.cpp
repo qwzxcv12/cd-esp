@@ -274,8 +274,25 @@ std::string replace_placeholder(std::string str, const std::string& placeholder,
     return str;
 }
 
+static bool is_authorized(httpd_req_t *req)
+{
+    char cookie_buf[128] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Cookie", cookie_buf, sizeof(cookie_buf)) == ESP_OK) {
+        if (strstr(cookie_buf, "passwd=thien1991") != NULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
+    if (!is_authorized(req)) {
+        httpd_resp_set_status(req, "307 Temporary Redirect");
+        httpd_resp_set_hdr(req, "Location", "/login");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
     char ssid[64] = {0};
     char password[64] = {0};
     char mqtt_server[64] = {0};
@@ -318,6 +335,10 @@ void restart_task(void *pvParameters) {
 
 static esp_err_t config_post_handler(httpd_req_t *req)
 {
+    if (!is_authorized(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
     int remaining = req->content_len;
     char *buf = (char*)malloc(remaining + 1);
     if (!buf) {
@@ -401,6 +422,12 @@ static esp_err_t config_post_handler(httpd_req_t *req)
 
 static esp_err_t log_get_handler(httpd_req_t *req)
 {
+    if (!is_authorized(req)) {
+        httpd_resp_set_status(req, "307 Temporary Redirect");
+        httpd_resp_set_hdr(req, "Location", "/login");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
     std::string html = log_page;
     html = replace_placeholder(html, "{{DEV_ID}}", g_dev_id);
     html = replace_placeholder(html, "{{DEV_KEY}}", g_dev_key);
@@ -410,6 +437,12 @@ static esp_err_t log_get_handler(httpd_req_t *req)
 
 static esp_err_t control_get_handler(httpd_req_t *req)
 {
+    if (!is_authorized(req)) {
+        httpd_resp_set_status(req, "307 Temporary Redirect");
+        httpd_resp_set_hdr(req, "Location", "/login");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
     extern const char* control_page;
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, control_page, strlen(control_page));
@@ -417,6 +450,10 @@ static esp_err_t control_get_handler(httpd_req_t *req)
 
 static esp_err_t log_data_get_handler(httpd_req_t *req)
 {
+    if (!is_authorized(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
     std::string all_logs = "";
     {
         std::lock_guard<std::mutex> lock(g_log_mutex);
@@ -430,6 +467,10 @@ static esp_err_t log_data_get_handler(httpd_req_t *req)
 
 static esp_err_t publish_post_handler(httpd_req_t *req)
 {
+    if (!is_authorized(req)) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+        return ESP_OK;
+    }
     int remaining = req->content_len;
     char *buf = (char*)malloc(remaining + 1);
     if (!buf) {
@@ -509,6 +550,71 @@ static esp_err_t publish_post_handler(httpd_req_t *req)
     return ESP_FAIL;
 }
 
+static esp_err_t login_get_handler(httpd_req_t *req)
+{
+    extern const char* login_page;
+    
+    char query[32] = {0};
+    bool has_error = false;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        if (strstr(query, "error=1") != NULL) {
+            has_error = true;
+        }
+    }
+    
+    std::string html = login_page;
+    if (has_error) {
+        html = replace_placeholder(html, "{{ERROR_STYLE}}", "display: block;");
+    } else {
+        html = replace_placeholder(html, "{{ERROR_STYLE}}", "display: none;");
+    }
+    
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, html.c_str(), html.length());
+}
+
+static esp_err_t login_post_handler(httpd_req_t *req)
+{
+    int remaining = req->content_len;
+    char *buf = (char*)malloc(remaining + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    int cur_len = 0;
+    int ret;
+    while (remaining > 0) {
+        if ((ret = httpd_req_recv(req, buf + cur_len, remaining)) <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+                continue;
+            }
+            free(buf);
+            return ESP_FAIL;
+        }
+        cur_len += ret;
+        remaining -= ret;
+    }
+    buf[cur_len] = '\0';
+
+    char password[64] = {0};
+    parse_url_param(buf, "password", password, sizeof(password));
+    free(buf);
+
+    if (strcmp(password, "thien1991") == 0) {
+        httpd_resp_set_hdr(req, "Set-Cookie", "passwd=thien1991; Path=/; Max-Age=86400");
+        httpd_resp_set_status(req, "307 Temporary Redirect");
+        httpd_resp_set_hdr(req, "Location", "/");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    } else {
+        httpd_resp_set_status(req, "307 Temporary Redirect");
+        httpd_resp_set_hdr(req, "Location", "/login?error=1");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+}
+
 static httpd_handle_t start_webserver(void)
 {
     httpd_handle_t server = NULL;
@@ -525,6 +631,22 @@ static httpd_handle_t start_webserver(void)
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(server, &root);
+
+        httpd_uri_t login_get = {
+            .uri       = "/login",
+            .method    = HTTP_GET,
+            .handler   = login_get_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &login_get);
+
+        httpd_uri_t login_post = {
+            .uri       = "/login",
+            .method    = HTTP_POST,
+            .handler   = login_post_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(server, &login_post);
 
         httpd_uri_t config_post = {
             .uri       = "/config",
