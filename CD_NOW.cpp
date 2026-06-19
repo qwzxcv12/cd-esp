@@ -284,10 +284,16 @@ std::string replace_placeholder(std::string str, const std::string& placeholder,
 
 static bool is_authorized(httpd_req_t *req)
 {
-    char cookie_buf[128] = {0};
-    if (httpd_req_get_hdr_value_str(req, "Cookie", cookie_buf, sizeof(cookie_buf)) == ESP_OK) {
+    char cookie_buf[512] = {0};
+    esp_err_t err = httpd_req_get_hdr_value_str(req, "Cookie", cookie_buf, sizeof(cookie_buf));
+    if (err == ESP_OK) {
         if (strstr(cookie_buf, "passwd=thien1991") != NULL) {
             return true;
+        }
+        ESP_LOGI(TAG, "Cookie found but password not matched: %s", cookie_buf);
+    } else {
+        if (err != ESP_ERR_NOT_FOUND) {
+            ESP_LOGI(TAG, "Cookie header error: %d", err);
         }
     }
     return false;
@@ -584,6 +590,7 @@ static esp_err_t login_get_handler(httpd_req_t *req)
 static esp_err_t login_post_handler(httpd_req_t *req)
 {
     int remaining = req->content_len;
+    ESP_LOGI(TAG, "Login POST received. Content-Length: %d", remaining);
     char *buf = (char*)malloc(remaining + 1);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
@@ -609,13 +616,17 @@ static esp_err_t login_post_handler(httpd_req_t *req)
     parse_url_param(buf, "password", password, sizeof(password));
     free(buf);
 
+    ESP_LOGI(TAG, "Login attempt. Parsed password: '%s'", password);
+
     if (strcmp(password, "thien1991") == 0) {
+        ESP_LOGI(TAG, "Login successful! Setting cookie and redirecting to /");
         httpd_resp_set_hdr(req, "Set-Cookie", "passwd=thien1991; Path=/");
         httpd_resp_set_status(req, "302 Found");
         httpd_resp_set_hdr(req, "Location", "/");
         httpd_resp_send(req, NULL, 0);
         return ESP_OK;
     } else {
+        ESP_LOGI(TAG, "Login failed! Redirecting to /login?error=1");
         httpd_resp_set_status(req, "302 Found");
         httpd_resp_set_hdr(req, "Location", "/login?error=1");
         httpd_resp_send(req, NULL, 0);
