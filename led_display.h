@@ -103,28 +103,29 @@ inline SelectedFontType getFontForTicketCode(const char* text, int16_t* yOffset,
     return FONT_U8G2_VIETNAMESE;
   }
   
+  int len = strlen(text);
   int16_t x1, y1;
   uint16_t w, h;
   
-  // 1. Try FreeSansBold12pt7b
-  dma_display->setFont(&FreeSansBold12pt7b);
-  dma_display->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
-  if (w <= PANEL_RES_X - 4) {
+  // 1. For length <= 4 (e.g. A-12, B-03, 102): Use FreeSansBold12pt7b
+  if (len <= 4) {
+    dma_display->setFont(&FreeSansBold12pt7b);
+    dma_display->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
     *yOffset = PANEL_RES_Y / 2 + 6; // yPos baseline for 12pt bold
     *calculatedWidth = (int)w;
     return FONT_SANS_12_BOLD;
   }
   
-  // 2. Try FreeSansBold9pt7b
-  dma_display->setFont(&FreeSansBold9pt7b);
-  dma_display->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
-  if (w <= PANEL_RES_X - 4) {
+  // 2. For length 5 or 6 (e.g. BH-001, A-102): Use FreeSansBold9pt7b
+  if (len <= 6) {
+    dma_display->setFont(&FreeSansBold9pt7b);
+    dma_display->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
     *yOffset = PANEL_RES_Y / 2 + 5; // yPos baseline for 9pt bold
     *calculatedWidth = (int)w;
     return FONT_SANS_9_BOLD;
   }
   
-  // 3. Fallback to Vietnamese font (u8g2)
+  // 3. For length >= 7 (e.g. BH-0001, KH-0002): Fallback to Vietnamese font (u8g2)
   u8g2Fonts.setFont(VIETNAMESE_FONT);
   int width = u8g2Fonts.getUTF8Width(text);
   *yOffset = PANEL_RES_Y / 2 + 6; // yPos baseline for Vietnamese font
