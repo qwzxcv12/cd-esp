@@ -342,9 +342,9 @@ static esp_err_t send_html_template_chunked(httpd_req_t *req, const char* templa
         
         esp_err_t res = ESP_OK;
         if (key == "SSID") {
-            res = httpd_resp_send_chunk(req, ssid, strlen(ssid));
+            if (strlen(ssid) > 0) res = httpd_resp_send_chunk(req, ssid, strlen(ssid));
         } else if (key == "PASSWORD") {
-            res = httpd_resp_send_chunk(req, password, strlen(password));
+            if (strlen(password) > 0) res = httpd_resp_send_chunk(req, password, strlen(password));
         } else if (key == "MQTT_SERVER") {
             const char* val = strlen(mqtt_server) > 0 ? mqtt_server : "qms1.camdvr.org";
             res = httpd_resp_send_chunk(req, val, strlen(val));
@@ -361,11 +361,11 @@ static esp_err_t send_html_template_chunked(httpd_req_t *req, const char* templa
             const char* val = strlen(mqtt_topic) > 0 ? mqtt_topic : "qms/display";
             res = httpd_resp_send_chunk(req, val, strlen(val));
         } else if (key == "WS_URL") {
-            res = httpd_resp_send_chunk(req, ws_url, strlen(ws_url));
+            if (strlen(ws_url) > 0) res = httpd_resp_send_chunk(req, ws_url, strlen(ws_url));
         } else if (key == "DEV_ID") {
-            res = httpd_resp_send_chunk(req, dev_id, strlen(dev_id));
+            if (strlen(dev_id) > 0) res = httpd_resp_send_chunk(req, dev_id, strlen(dev_id));
         } else if (key == "DEV_KEY") {
-            res = httpd_resp_send_chunk(req, dev_key, strlen(dev_key));
+            if (strlen(dev_key) > 0) res = httpd_resp_send_chunk(req, dev_key, strlen(dev_key));
         } else {
             res = httpd_resp_send_chunk(req, placeholder, end + 2 - placeholder);
         }
@@ -408,9 +408,9 @@ static esp_err_t send_log_template_chunked(httpd_req_t *req, const char* templat
         
         esp_err_t res = ESP_OK;
         if (key == "DEV_ID") {
-            res = httpd_resp_send_chunk(req, dev_id, strlen(dev_id));
+            if (strlen(dev_id) > 0) res = httpd_resp_send_chunk(req, dev_id, strlen(dev_id));
         } else if (key == "DEV_KEY") {
-            res = httpd_resp_send_chunk(req, dev_key, strlen(dev_key));
+            if (strlen(dev_key) > 0) res = httpd_resp_send_chunk(req, dev_key, strlen(dev_key));
         } else {
             res = httpd_resp_send_chunk(req, placeholder, end + 2 - placeholder);
         }
