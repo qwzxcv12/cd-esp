@@ -276,41 +276,119 @@ bool parse_url_param(const char* body, const char* key, char* dst, size_t dst_ma
     return true;
 }
 
-// Helper function to replace placeholders in a string
-std::string replace_placeholder(std::string str, const std::string& placeholder, const std::string& replacement) {
-    size_t pos = 0;
-    while ((pos = str.find(placeholder, pos)) != std::string::npos) {
-        str.replace(pos, placeholder.length(), replacement);
-        pos += replacement.length();
+// Helper function to send HTML template using chunked response to avoid large heap allocations
+static esp_err_t send_html_template_chunked(httpd_req_t *req, const char* template_str, 
+                                const char* ssid, const char* password,
+                                const char* mqtt_server, const char* mqtt_port,
+                                const char* mqtt_user, const char* mqtt_pass,
+                                const char* mqtt_topic, const char* ws_url,
+                                const char* dev_id, const char* dev_key) {
+    const char* ptr = template_str;
+    const char* placeholder = nullptr;
+    
+    while ((placeholder = strstr(ptr, "{{")) != nullptr) {
+        size_t static_len = placeholder - ptr;
+        if (static_len > 0) {
+            if (httpd_resp_send_chunk(req, ptr, static_len) != ESP_OK) {
+                return ESP_FAIL;
+            }
+        }
+        
+        const char* end = strstr(placeholder, "}}");
+        if (!end) {
+            httpd_resp_send_chunk(req, placeholder, strlen(placeholder));
+            return ESP_OK;
+        }
+        
+        size_t key_len = end - (placeholder + 2);
+        std::string key(placeholder + 2, key_len);
+        
+        esp_err_t res = ESP_OK;
+        if (key == "SSID") {
+            res = httpd_resp_send_chunk(req, ssid, strlen(ssid));
+        } else if (key == "PASSWORD") {
+            res = httpd_resp_send_chunk(req, password, strlen(password));
+        } else if (key == "MQTT_SERVER") {
+            const char* val = strlen(mqtt_server) > 0 ? mqtt_server : "qms1.camdvr.org";
+            res = httpd_resp_send_chunk(req, val, strlen(val));
+        } else if (key == "MQTT_PORT") {
+            const char* val = strlen(mqtt_port) > 0 ? mqtt_port : "1993";
+            res = httpd_resp_send_chunk(req, val, strlen(val));
+        } else if (key == "MQTT_USER") {
+            const char* val = strlen(mqtt_user) > 0 ? mqtt_user : "thom";
+            res = httpd_resp_send_chunk(req, val, strlen(val));
+        } else if (key == "MQTT_PASS") {
+            const char* val = strlen(mqtt_pass) > 0 ? mqtt_pass : "301258";
+            res = httpd_resp_send_chunk(req, val, strlen(val));
+        } else if (key == "MQTT_TOPIC") {
+            const char* val = strlen(mqtt_topic) > 0 ? mqtt_topic : "qms/display";
+            res = httpd_resp_send_chunk(req, val, strlen(val));
+        } else if (key == "WS_URL") {
+            res = httpd_resp_send_chunk(req, ws_url, strlen(ws_url));
+        } else if (key == "DEV_ID") {
+            res = httpd_resp_send_chunk(req, dev_id, strlen(dev_id));
+        } else if (key == "DEV_KEY") {
+            res = httpd_resp_send_chunk(req, dev_key, strlen(dev_key));
+        } else {
+            res = httpd_resp_send_chunk(req, placeholder, end + 2 - placeholder);
+        }
+        
+        if (res != ESP_OK) {
+            return ESP_FAIL;
+        }
+        
+        ptr = end + 2;
     }
-    return str;
+    
+    if (strlen(ptr) > 0) {
+        if (httpd_resp_send_chunk(req, ptr, strlen(ptr)) != ESP_OK) {
+            return ESP_FAIL;
+        }
+    }
+    
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
-static bool is_authorized(httpd_req_t *req)
-{
-    size_t hdr_len = httpd_req_get_hdr_value_len(req, "Cookie");
-    if (hdr_len == 0) {
-        return false;
-    }
-    char* cookie_buf = (char*)malloc(hdr_len + 1);
-    if (!cookie_buf) {
-        return false;
-    }
-    esp_err_t err = httpd_req_get_hdr_value_str(req, "Cookie", cookie_buf, hdr_len + 1);
-    bool authorized = false;
-    if (err == ESP_OK) {
-        if (strstr(cookie_buf, "passwd=thien1991") != NULL) {
-            authorized = true;
+// Helper function to send Log template using chunked response
+static esp_err_t send_log_template_chunked(httpd_req_t *req, const char* template_str, const char* dev_id, const char* dev_key) {
+    const char* ptr = template_str;
+    const char* placeholder = nullptr;
+    
+    while ((placeholder = strstr(ptr, "{{")) != nullptr) {
+        size_t static_len = placeholder - ptr;
+        if (static_len > 0) {
+            if (httpd_resp_send_chunk(req, ptr, static_len) != ESP_OK) {
+                return ESP_FAIL;
+            }
+        }
+        const char* end = strstr(placeholder, "}}");
+        if (!end) {
+            httpd_resp_send_chunk(req, placeholder, strlen(placeholder));
+            return ESP_OK;
+        }
+        size_t key_len = end - (placeholder + 2);
+        std::string key(placeholder + 2, key_len);
+        
+        esp_err_t res = ESP_OK;
+        if (key == "DEV_ID") {
+            res = httpd_resp_send_chunk(req, dev_id, strlen(dev_id));
+        } else if (key == "DEV_KEY") {
+            res = httpd_resp_send_chunk(req, dev_key, strlen(dev_key));
         } else {
-            ESP_LOGI(TAG, "Cookie found but password not matched: %s", cookie_buf);
+            res = httpd_resp_send_chunk(req, placeholder, end + 2 - placeholder);
         }
-    } else {
-        if (err != ESP_ERR_NOT_FOUND) {
-            ESP_LOGI(TAG, "Cookie header error: %d", err);
+        
+        if (res != ESP_OK) {
+            return ESP_FAIL;
+        }
+        ptr = end + 2;
+    }
+    if (strlen(ptr) > 0) {
+        if (httpd_resp_send_chunk(req, ptr, strlen(ptr)) != ESP_OK) {
+            return ESP_FAIL;
         }
     }
-    free(cookie_buf);
-    return authorized;
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 static esp_err_t root_get_handler(httpd_req_t *req)
@@ -338,21 +416,8 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     read_ws_config(ws_url, sizeof(ws_url));
     read_dev_credentials(dev_id, sizeof(dev_id), dev_key, sizeof(dev_key));
 
-    // Substitute placeholders
-    std::string html = html_page;
-    html = replace_placeholder(html, "{{SSID}}", ssid);
-    html = replace_placeholder(html, "{{PASSWORD}}", password);
-    html = replace_placeholder(html, "{{MQTT_SERVER}}", strlen(mqtt_server) > 0 ? mqtt_server : "qms1.camdvr.org");
-    html = replace_placeholder(html, "{{MQTT_PORT}}", strlen(mqtt_port) > 0 ? mqtt_port : "1993");
-    html = replace_placeholder(html, "{{MQTT_USER}}", strlen(mqtt_user) > 0 ? mqtt_user : "thom");
-    html = replace_placeholder(html, "{{MQTT_PASS}}", strlen(mqtt_pass) > 0 ? mqtt_pass : "301258");
-    html = replace_placeholder(html, "{{MQTT_TOPIC}}", strlen(mqtt_topic) > 0 ? mqtt_topic : "qms/display");
-    html = replace_placeholder(html, "{{WS_URL}}", ws_url);
-    html = replace_placeholder(html, "{{DEV_ID}}", dev_id);
-    html = replace_placeholder(html, "{{DEV_KEY}}", dev_key);
-
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, html.c_str(), html.length());
+    return send_html_template_chunked(req, html_page, ssid, password, mqtt_server, mqtt_port, mqtt_user, mqtt_pass, mqtt_topic, ws_url, dev_id, dev_key);
 }
 
 void restart_task(void *pvParameters) {
@@ -456,11 +521,8 @@ static esp_err_t log_get_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "Redirecting...");
         return ESP_OK;
     }
-    std::string html = log_page;
-    html = replace_placeholder(html, "{{DEV_ID}}", g_dev_id);
-    html = replace_placeholder(html, "{{DEV_KEY}}", g_dev_key);
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, html.c_str(), html.length());
+    return send_log_template_chunked(req, log_page, g_dev_id, g_dev_key);
 }
 
 static esp_err_t control_get_handler(httpd_req_t *req)
