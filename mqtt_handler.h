@@ -78,7 +78,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         add_device_log("MQTT CONNECTED to broker!");
         if (show_startup_messages) {
             extern void processMessage(const char* command);
-            processMessage("xanh MQTT Connected");
+            char buf[128];
+            if (strlen(g_sta_ip) > 0) {
+                snprintf(buf, sizeof(buf), "xanh IP: %s - MQTT Connected", g_sta_ip);
+            } else {
+                snprintf(buf, sizeof(buf), "xanh MQTT Connected");
+            }
+            processMessage(buf);
         }
         if (strlen(g_mqtt_topic) > 0) {
             char topic_buf[256];
@@ -118,7 +124,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         add_device_log("MQTT DISCONNECTED. Reconnecting...");
         if (show_startup_messages) {
             extern void processMessage(const char* command);
-            processMessage("cam MQTT Disconn");
+            char buf[128];
+            if (strlen(g_sta_ip) > 0) {
+                snprintf(buf, sizeof(buf), "cam IP: %s - MQTT Disconnected", g_sta_ip);
+            } else {
+                snprintf(buf, sizeof(buf), "cam MQTT Disconn");
+            }
+            processMessage(buf);
         }
         break;
 
@@ -200,7 +212,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         add_device_log("MQTT Error occurred");
         if (show_startup_messages) {
             extern void processMessage(const char* command);
-            processMessage("do MQTT Error");
+            char buf[128];
+            if (strlen(g_sta_ip) > 0) {
+                snprintf(buf, sizeof(buf), "do IP: %s - MQTT Error", g_sta_ip);
+            } else {
+                snprintf(buf, sizeof(buf), "do MQTT Error");
+            }
+            processMessage(buf);
         }
         break;
 

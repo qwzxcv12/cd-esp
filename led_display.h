@@ -44,6 +44,7 @@ inline char textToDisplay[250] = "Ready";
 inline uint16_t textColor = 0xFFFF;    // Default white
 inline bool needRedraw = true;
 inline bool show_startup_messages = true;
+inline char g_sta_ip[32] = "";
 
 // Scrolling variables
 inline bool isScrolling = false;

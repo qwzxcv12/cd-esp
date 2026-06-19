@@ -201,14 +201,13 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        char ip_str[32];
-        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&event->ip_info.ip));
-        add_device_log("Successfully got IP: %s", ip_str);
+        snprintf(g_sta_ip, sizeof(g_sta_ip), IPSTR, IP2STR(&event->ip_info.ip));
+        add_device_log("Successfully got IP: %s", g_sta_ip);
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         if (show_startup_messages) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "xanh IP: %s", ip_str);
+            char buf[96];
+            snprintf(buf, sizeof(buf), "xanh IP: %s", g_sta_ip);
             processMessage(buf);
             
             // Start the 30-second timer to clear the startup messages now that we got the IP!
