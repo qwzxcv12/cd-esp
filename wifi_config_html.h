@@ -838,6 +838,9 @@ const char* log_page = R"html(
             </div>
         </div>
 
+        <div class="panel__nav">
+            <!-- Secondary nav fallback inside body if needed, otherwise ignore -->
+        </div>
         <div class="panel__footer">
             <span class="status">Realtime logs (auto-refresh 5s)</span>
             <span class="status" style="color: var(--ok);">Active</span>
@@ -984,10 +987,10 @@ const char* log_page = R"html(
                     cmd: "display_ticket",
                     data: {
                         ticket: "BH-003",
-                        service: "Card Issuance",
-                        counter: "Counter 03",
+                        service: "Cấp thẻ Bảo hiểm y tế",
+                        counter: "Quầy số 03",
                         status: "CALLING",
-                        cust_name: "John Doe"
+                        cust_name: "Nguyễn Văn A"
                     }
                 });
             } else if (select.value === 'clear') {

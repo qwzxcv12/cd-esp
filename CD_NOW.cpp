@@ -442,7 +442,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     char mqtt_port[16] = {0};
     char mqtt_user[64] = {0};
     char mqtt_pass[64] = {0};
-    char mqtt_topic[64] = {0};
+    char mqtt_topic[256] = {0};
     char ws_url[128] = {0};
     char dev_id[128] = {0};
     char dev_key[128] = {0};
@@ -498,7 +498,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     char mqtt_port[16] = {0};
     char mqtt_user[64] = {0};
     char mqtt_pass[64] = {0};
-    char mqtt_topic[64] = {0};
+    char mqtt_topic[256] = {0};
     char ws_url[128] = {0};
     char dev_id[128] = {0};
     char dev_key[128] = {0};
@@ -911,7 +911,7 @@ extern "C" void app_main(void)
     char mqtt_port[16] = {0};
     char mqtt_user[64] = {0};
     char mqtt_pass[64] = {0};
-    char mqtt_topic[64] = {0};
+    char mqtt_topic[256] = {0};
     char ws_url[128] = {0};
     char dev_id[128] = {0};
     char dev_key[128] = {0};
