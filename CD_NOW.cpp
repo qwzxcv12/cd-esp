@@ -454,6 +454,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     read_dev_credentials(dev_id, sizeof(dev_id), dev_key, sizeof(dev_key));
 
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Connection", "close");
     return send_html_template_chunked(req, html_page, ssid, password, mqtt_server, mqtt_port, mqtt_user, mqtt_pass, mqtt_topic, ws_url, dev_id, dev_key);
 }
 
@@ -542,6 +543,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     "<p>ESP32 is rebooting. You will be redirected to the System Logs page in 4 seconds...</p>"
     "<a href='/log' class=\"btn\">Go to Logs Now</a></body></html>";
     
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_sendstr_chunk(req, success_html_1);
     httpd_resp_sendstr_chunk(req, NULL);
 
@@ -559,6 +561,7 @@ static esp_err_t log_get_handler(httpd_req_t *req)
         return ESP_OK;
     }
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Connection", "close");
     return send_log_template_chunked(req, log_page, g_dev_id, g_dev_key);
 }
 
@@ -572,6 +575,7 @@ static esp_err_t control_get_handler(httpd_req_t *req)
     }
     extern const char* control_page;
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Connection", "close");
     return httpd_resp_send(req, control_page, strlen(control_page));
 }
 
@@ -589,6 +593,7 @@ static esp_err_t log_data_get_handler(httpd_req_t *req)
         }
     }
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Connection", "close");
     return httpd_resp_send(req, all_logs.c_str(), all_logs.length());
 }
 
@@ -660,10 +665,12 @@ static esp_err_t publish_post_handler(httpd_req_t *req)
         if (mqtt_client) {
             int msg_id = esp_mqtt_client_publish(mqtt_client, topic, payload, 0, 1, 0);
             add_device_log("Web Publish: Topic='%s', MsgID=%d, Payload='%s'", topic, msg_id, payload);
+            httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_sendstr(req, "SUCCESS");
             return ESP_OK;
         } else if (local_processed) {
             add_device_log("Web Publish (Local Only): Topic='%s', Payload='%s'", topic, payload);
+            httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_sendstr(req, "SUCCESS (LOCAL ONLY)");
             return ESP_OK;
         } else {
@@ -697,6 +704,7 @@ static esp_err_t login_get_handler(httpd_req_t *req)
     }
     
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Connection", "close");
     return httpd_resp_send(req, html.c_str(), html.length());
 }
 
@@ -733,6 +741,7 @@ static esp_err_t login_post_handler(httpd_req_t *req)
 
     if (strcmp(password, "thien1991") == 0) {
         ESP_LOGI(TAG, "Login successful! Setting cookie and redirecting to /");
+        httpd_resp_set_hdr(req, "Connection", "close");
         httpd_resp_set_hdr(req, "Set-Cookie", "passwd=thien1991; Path=/");
         httpd_resp_set_status(req, "302 Found");
         httpd_resp_set_hdr(req, "Location", "/");
@@ -740,6 +749,7 @@ static esp_err_t login_post_handler(httpd_req_t *req)
         return ESP_OK;
     } else {
         ESP_LOGI(TAG, "Login failed! Redirecting to /login?error=1");
+        httpd_resp_set_hdr(req, "Connection", "close");
         httpd_resp_set_status(req, "302 Found");
         httpd_resp_set_hdr(req, "Location", "/login?error=1");
         httpd_resp_sendstr(req, "Redirecting...");
