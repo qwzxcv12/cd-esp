@@ -276,6 +276,43 @@ bool parse_url_param(const char* body, const char* key, char* dst, size_t dst_ma
     return true;
 }
 
+// Helper function to replace placeholders in a string
+static std::string replace_placeholder(std::string str, const std::string& placeholder, const std::string& replacement) {
+    size_t pos = 0;
+    while ((pos = str.find(placeholder, pos)) != std::string::npos) {
+        str.replace(pos, placeholder.length(), replacement);
+        pos += replacement.length();
+    }
+    return str;
+}
+
+static bool is_authorized(httpd_req_t *req)
+{
+    size_t hdr_len = httpd_req_get_hdr_value_len(req, "Cookie");
+    if (hdr_len == 0) {
+        return false;
+    }
+    char* cookie_buf = (char*)malloc(hdr_len + 1);
+    if (!cookie_buf) {
+        return false;
+    }
+    esp_err_t err = httpd_req_get_hdr_value_str(req, "Cookie", cookie_buf, hdr_len + 1);
+    bool authorized = false;
+    if (err == ESP_OK) {
+        if (strstr(cookie_buf, "passwd=thien1991") != NULL) {
+            authorized = true;
+        } else {
+            ESP_LOGI(TAG, "Cookie found but password not matched: %s", cookie_buf);
+        }
+    } else {
+        if (err != ESP_ERR_NOT_FOUND) {
+            ESP_LOGI(TAG, "Cookie header error: %d", err);
+        }
+    }
+    free(cookie_buf);
+    return authorized;
+}
+
 // Helper function to send HTML template using chunked response to avoid large heap allocations
 static esp_err_t send_html_template_chunked(httpd_req_t *req, const char* template_str, 
                                 const char* ssid, const char* password,
