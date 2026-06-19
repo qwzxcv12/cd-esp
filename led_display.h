@@ -13,6 +13,7 @@
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 #include <U8g2_for_Adafruit_GFX.h>
 #include <Fonts/FreeSansBold12pt7b.h> 
+#include <Fonts/FreeSansBold9pt7b.h>
 
 // Define the connected PINs between P5 and ESP32
 #define R1_PIN 25
@@ -88,6 +89,48 @@ struct TextSegment {
 
 // Font selection
 inline const uint8_t* VIETNAMESE_FONT = u8g2_font_unifont_t_vietnamese1;
+
+enum SelectedFontType {
+  FONT_SANS_12_BOLD,
+  FONT_SANS_9_BOLD,
+  FONT_U8G2_VIETNAMESE
+};
+
+inline SelectedFontType getFontForTicketCode(const char* text, int16_t* yOffset, int* calculatedWidth) {
+  if (!dma_display) {
+    *yOffset = PANEL_RES_Y / 2 + 6;
+    *calculatedWidth = 0;
+    return FONT_U8G2_VIETNAMESE;
+  }
+  
+  int16_t x1, y1;
+  uint16_t w, h;
+  
+  // 1. Try FreeSansBold12pt7b
+  dma_display->setFont(&FreeSansBold12pt7b);
+  dma_display->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+  if (w <= PANEL_RES_X - 4) {
+    *yOffset = PANEL_RES_Y / 2 + 6; // yPos baseline for 12pt bold
+    *calculatedWidth = (int)w;
+    return FONT_SANS_12_BOLD;
+  }
+  
+  // 2. Try FreeSansBold9pt7b
+  dma_display->setFont(&FreeSansBold9pt7b);
+  dma_display->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+  if (w <= PANEL_RES_X - 4) {
+    *yOffset = PANEL_RES_Y / 2 + 5; // yPos baseline for 9pt bold
+    *calculatedWidth = (int)w;
+    return FONT_SANS_9_BOLD;
+  }
+  
+  // 3. Fallback to Vietnamese font (u8g2)
+  u8g2Fonts.setFont(VIETNAMESE_FONT);
+  int width = u8g2Fonts.getUTF8Width(text);
+  *yOffset = PANEL_RES_Y / 2 + 6; // yPos baseline for Vietnamese font
+  *calculatedWidth = width;
+  return FONT_U8G2_VIETNAMESE;
+}
 
 // Helper function to check if the string is a ticket code (like BH-001, KH-0002, A-12, etc.)
 inline bool isTicketCode(const char* text) {
@@ -197,9 +240,23 @@ inline void updateScrollingText() {
   
   if (currentContentType == ONLY_NUMBERS) {
     dma_display->setTextColor(textColor);
-    dma_display->setFont(&FreeSansBold12pt7b);
-    dma_display->setCursor(-scrollPosition, yPos);
-    dma_display->print(textToDisplay);
+    int16_t bestY = yPos;
+    int calculatedW = 0;
+    SelectedFontType selectedFont = getFontForTicketCode(textToDisplay, &bestY, &calculatedW);
+    if (selectedFont == FONT_SANS_12_BOLD) {
+      dma_display->setFont(&FreeSansBold12pt7b);
+      dma_display->setCursor(-scrollPosition, bestY);
+      dma_display->print(textToDisplay);
+    } else if (selectedFont == FONT_SANS_9_BOLD) {
+      dma_display->setFont(&FreeSansBold9pt7b);
+      dma_display->setCursor(-scrollPosition, bestY);
+      dma_display->print(textToDisplay);
+    } else {
+      u8g2Fonts.setFont(VIETNAMESE_FONT);
+      u8g2Fonts.setForegroundColor(textColor);
+      u8g2Fonts.setCursor(-scrollPosition, bestY);
+      u8g2Fonts.print(textToDisplay);
+    }
   } 
   else if (currentContentType == ONLY_TEXT) {
     u8g2Fonts.setFont(VIETNAMESE_FONT);
@@ -294,13 +351,15 @@ inline void updateDisplay() {
   
   currentContentType = analyzeContentType(textToDisplay);
   
+  int16_t yPos = PANEL_RES_Y / 2 + 6;
+  SelectedFontType selectedFont = FONT_U8G2_VIETNAMESE;
+  
   if (currentContentType == ONLY_NUMBERS) {
-    dma_display->setTextColor(textColor);
-    dma_display->setFont(&FreeSansBold12pt7b);
-    int16_t x1, y1;
-    uint16_t w, h;
-    dma_display->getTextBounds(textToDisplay, 0, 0, &x1, &y1, &w, &h);
-    textWidth = w;
+    int16_t bestY = yPos;
+    int calculatedW = 0;
+    selectedFont = getFontForTicketCode(textToDisplay, &bestY, &calculatedW);
+    yPos = bestY;
+    textWidth = calculatedW;
   } 
   else if (currentContentType == ONLY_TEXT) {
     u8g2Fonts.setFont(VIETNAMESE_FONT);
@@ -310,17 +369,26 @@ inline void updateDisplay() {
     textWidth = calculateMixedTextWidth(textToDisplay);
   }
   
-  int16_t yPos = PANEL_RES_Y / 2 + 6; 
-  
   if (strlen(textToDisplay) <= 4 && currentContentType != MIXED_CONTENT) {
     isScrolling = false;
     int16_t xPos = (PANEL_RES_X - textWidth) / 2; 
     
     if (currentContentType == ONLY_NUMBERS) {
       dma_display->setTextColor(textColor);
-      dma_display->setFont(&FreeSansBold12pt7b);
-      dma_display->setCursor(xPos, yPos);
-      dma_display->print(textToDisplay);
+      if (selectedFont == FONT_SANS_12_BOLD) {
+        dma_display->setFont(&FreeSansBold12pt7b);
+        dma_display->setCursor(xPos, yPos);
+        dma_display->print(textToDisplay);
+      } else if (selectedFont == FONT_SANS_9_BOLD) {
+        dma_display->setFont(&FreeSansBold9pt7b);
+        dma_display->setCursor(xPos, yPos);
+        dma_display->print(textToDisplay);
+      } else {
+        u8g2Fonts.setFont(VIETNAMESE_FONT);
+        u8g2Fonts.setForegroundColor(textColor);
+        u8g2Fonts.setCursor(xPos, yPos);
+        u8g2Fonts.print(textToDisplay);
+      }
     } 
     else if (currentContentType == ONLY_TEXT) {
       u8g2Fonts.setFont(VIETNAMESE_FONT);
@@ -335,9 +403,20 @@ inline void updateDisplay() {
     
     if (currentContentType == ONLY_NUMBERS) {
       dma_display->setTextColor(textColor);
-      dma_display->setFont(&FreeSansBold12pt7b);
-      dma_display->setCursor(xPos, yPos);
-      dma_display->print(textToDisplay);
+      if (selectedFont == FONT_SANS_12_BOLD) {
+        dma_display->setFont(&FreeSansBold12pt7b);
+        dma_display->setCursor(xPos, yPos);
+        dma_display->print(textToDisplay);
+      } else if (selectedFont == FONT_SANS_9_BOLD) {
+        dma_display->setFont(&FreeSansBold9pt7b);
+        dma_display->setCursor(xPos, yPos);
+        dma_display->print(textToDisplay);
+      } else {
+        u8g2Fonts.setFont(VIETNAMESE_FONT);
+        u8g2Fonts.setForegroundColor(textColor);
+        u8g2Fonts.setCursor(xPos, yPos);
+        u8g2Fonts.print(textToDisplay);
+      }
     } 
     else if (currentContentType == ONLY_TEXT) {
       u8g2Fonts.setFont(VIETNAMESE_FONT);
