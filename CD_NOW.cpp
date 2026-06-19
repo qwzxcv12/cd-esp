@@ -455,6 +455,8 @@ static esp_err_t root_get_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    httpd_resp_set_hdr(req, "Pragma", "no-cache");
     return send_html_template_chunked(req, html_page, ssid, password, mqtt_server, mqtt_port, mqtt_user, mqtt_pass, mqtt_topic, ws_url, dev_id, dev_key);
 }
 
@@ -562,6 +564,8 @@ static esp_err_t log_get_handler(httpd_req_t *req)
     }
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    httpd_resp_set_hdr(req, "Pragma", "no-cache");
     return send_log_template_chunked(req, log_page, g_dev_id, g_dev_key);
 }
 
@@ -576,6 +580,8 @@ static esp_err_t control_get_handler(httpd_req_t *req)
     extern const char* control_page;
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    httpd_resp_set_hdr(req, "Pragma", "no-cache");
     return httpd_resp_send(req, control_page, strlen(control_page));
 }
 
@@ -705,6 +711,8 @@ static esp_err_t login_get_handler(httpd_req_t *req)
     
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    httpd_resp_set_hdr(req, "Pragma", "no-cache");
     return httpd_resp_send(req, html.c_str(), html.length());
 }
 
