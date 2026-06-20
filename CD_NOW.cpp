@@ -313,6 +313,21 @@ static bool is_authorized(httpd_req_t *req)
     return authorized;
 }
 
+// Helper: send large data in small 1KB chunks to prevent timeout on slow AP WiFi
+#define CHUNK_SEND_SIZE 1024
+static esp_err_t send_large_chunk(httpd_req_t *req, const char* data, size_t len) {
+    size_t sent = 0;
+    while (sent < len) {
+        size_t to_send = len - sent;
+        if (to_send > CHUNK_SEND_SIZE) to_send = CHUNK_SEND_SIZE;
+        if (httpd_resp_send_chunk(req, data + sent, to_send) != ESP_OK) {
+            return ESP_FAIL;
+        }
+        sent += to_send;
+    }
+    return ESP_OK;
+}
+
 // Helper function to send HTML template using chunked response to avoid large heap allocations
 static esp_err_t send_html_template_chunked(httpd_req_t *req, const char* template_str, 
                                 const char* ssid, const char* password,
@@ -326,14 +341,14 @@ static esp_err_t send_html_template_chunked(httpd_req_t *req, const char* templa
     while ((placeholder = strstr(ptr, "{{")) != nullptr) {
         size_t static_len = placeholder - ptr;
         if (static_len > 0) {
-            if (httpd_resp_send_chunk(req, ptr, static_len) != ESP_OK) {
+            if (send_large_chunk(req, ptr, static_len) != ESP_OK) {
                 return ESP_FAIL;
             }
         }
         
         const char* end = strstr(placeholder, "}}");
         if (!end) {
-            httpd_resp_send_chunk(req, placeholder, strlen(placeholder));
+            send_large_chunk(req, placeholder, strlen(placeholder));
             return ESP_OK;
         }
         
@@ -378,7 +393,7 @@ static esp_err_t send_html_template_chunked(httpd_req_t *req, const char* templa
     }
     
     if (strlen(ptr) > 0) {
-        if (httpd_resp_send_chunk(req, ptr, strlen(ptr)) != ESP_OK) {
+        if (send_large_chunk(req, ptr, strlen(ptr)) != ESP_OK) {
             return ESP_FAIL;
         }
     }
@@ -394,13 +409,13 @@ static esp_err_t send_log_template_chunked(httpd_req_t *req, const char* templat
     while ((placeholder = strstr(ptr, "{{")) != nullptr) {
         size_t static_len = placeholder - ptr;
         if (static_len > 0) {
-            if (httpd_resp_send_chunk(req, ptr, static_len) != ESP_OK) {
+            if (send_large_chunk(req, ptr, static_len) != ESP_OK) {
                 return ESP_FAIL;
             }
         }
         const char* end = strstr(placeholder, "}}");
         if (!end) {
-            httpd_resp_send_chunk(req, placeholder, strlen(placeholder));
+            send_large_chunk(req, placeholder, strlen(placeholder));
             return ESP_OK;
         }
         size_t key_len = end - (placeholder + 2);
@@ -421,7 +436,7 @@ static esp_err_t send_log_template_chunked(httpd_req_t *req, const char* templat
         ptr = end + 2;
     }
     if (strlen(ptr) > 0) {
-        if (httpd_resp_send_chunk(req, ptr, strlen(ptr)) != ESP_OK) {
+        if (send_large_chunk(req, ptr, strlen(ptr)) != ESP_OK) {
             return ESP_FAIL;
         }
     }
@@ -773,6 +788,8 @@ static httpd_handle_t start_webserver(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 16384; // Increase stack size to prevent stack overflow
     config.lru_purge_enable = true;
+    config.send_wait_timeout = 30; // 30 seconds timeout for slow AP WiFi
+    config.recv_wait_timeout = 30; // 30 seconds receive timeout
 
     ESP_LOGI(TAG, "Starting web server on port: %d", config.server_port);
     if (httpd_start(&server, &config) == ESP_OK) {
