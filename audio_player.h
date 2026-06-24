@@ -10,8 +10,8 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 
-#define I2S_SPEAKER_BCLK 32
-#define I2S_SPEAKER_LRCK 33
+#define I2S_SPEAKER_BCLK 33
+#define I2S_SPEAKER_LRCK 32
 #define I2S_SPEAKER_DOUT 2
 #define I2S_SPEAKER_PORT I2S_NUM_0
 
