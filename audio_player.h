@@ -13,7 +13,7 @@
 #define I2S_SPEAKER_BCLK 33
 #define I2S_SPEAKER_LRCK 32
 #define I2S_SPEAKER_DOUT 2
-#define I2S_SPEAKER_PORT I2S_NUM_0
+#define I2S_SPEAKER_PORT I2S_NUM_1
 
 static const char *AUDIO_TAG = "audio_player";
 
