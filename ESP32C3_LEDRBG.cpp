@@ -194,7 +194,7 @@ static void light_single_led(uint8_t ic, uint8_t k) {
 }
 
 static void led_task(void *pvParameters) {
-    ESP_LOGI(TAG, "=== TEST SANG TUAN TU CHINH XAC SILKSCREEN 100% ===");
+    ESP_LOGI(TAG, "=== TEST SANG TUAN TU CHINH XAC SILKSCREEN 100 PERCENT ===");
 
     for (int i = 0; i < NUM_ICS; i++) {
         init_ht16d35a(i);
