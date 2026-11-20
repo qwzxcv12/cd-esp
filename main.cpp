@@ -125,7 +125,7 @@ static void led_task(void *pv) {
             fb[0][addr] = 0xFF; // Chi IC1
             fb_render();
             ESP_LOGI(TAG, "P1 BUOC %02d: IC1 addr=%02d ON (0xFF) | Ghi: hang nao? mau gi?", addr, addr);
-            vTaskDelay(pdMS_TO_TICKS(2000)); // 2 giay moi buoc
+            vTaskDelay(pdMS_TO_TICKS(5000)); // 5 giay moi buoc
         }
 
         // Tat het
@@ -147,7 +147,7 @@ static void led_task(void *pv) {
             fb[0][addr] = 0x01; // Chi IC1, 1 bit duy nhat
             fb_render();
             ESP_LOGI(TAG, "P2 BUOC %d: IC1 addr=%d, bit=0 | MAU GI? Bong D4XX?", addr, addr);
-            vTaskDelay(pdMS_TO_TICKS(3000)); // 3 giay
+            vTaskDelay(pdMS_TO_TICKS(5000)); // 5 giay
         }
 
         // Bat ca 3 cung luc => phai sang TRANG 1 bong
@@ -155,7 +155,7 @@ static void led_task(void *pv) {
         fb[0][0] = 0x01; fb[0][1] = 0x01; fb[0][2] = 0x01;
         fb_render();
         ESP_LOGI(TAG, "P2 BUOC 3: addr 0+1+2 cung luc => 1 bong TRANG hay 3 bong khac nhau?");
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
 
         fb_clear(); fb_render();
         ESP_LOGI(TAG, "--- PHASE 2 XONG ---");
@@ -175,7 +175,7 @@ static void led_task(void *pv) {
             fb[0][0] = (1 << bit); // Chi IC1, addr=0, 1 bit
             fb_render();
             ESP_LOGI(TAG, "P3 BUOC %d: IC1 addr=0, bit=%d (COM%d) | Bong nao? Cot nao?", bit, bit, bit);
-            vTaskDelay(pdMS_TO_TICKS(2000));
+            vTaskDelay(pdMS_TO_TICKS(5000));
         }
 
         fb_clear(); fb_render();
