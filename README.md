@@ -20,9 +20,9 @@ Mạch gồm **4 chip HT16D35A (Holtek 48-LQFP)** ghép tầng (Cascade) để �
 | :---: | :--- | :--- | :--- |
 | **6** | `VSS` | Mass logic | Nối GND chung |
 | **7** | `VDD` | Nguồn logic (2.7V - 5.5V) | Cấp 3.3V từ ESP32 (hoặc 5V ngoài) |
-| **9** | `DIO` | Đường dữ liệu (Data In/Out) | Nối chung cả 4 IC $\rightarrow$ Nối vào **GPIO 4** ESP32-C3 |
-| **10** | `CLK` | Xung nhịp đồng hồ (Clock) | Nối chung cả 4 IC $\rightarrow$ Nối vào **GPIO 3** ESP32-C3 |
-| **11** | `CSB` | Chip Select (Active LOW) | **Độc lập** từng IC $\rightarrow$ Nối **GPIO 5, 6, 7, 10** ESP32-C3 |
+| **9** | `DIO` | Đường dữ liệu (Data In/Out) | Nối chung cả 4 IC $\rightarrow$ Nối vào **GPIO 0** ESP32-C3 |
+| **10** | `CLK` | Xung nhịp đồng hồ (Clock) | Nối chung cả 4 IC $\rightarrow$ Nối vào **GPIO 1** ESP32-C3 |
+| **11** | `CSB` | Chip Select (Active LOW) | **Độc lập** từng IC $\rightarrow$ Nối **GPIO 20, 21, 9, 10** ESP32-C3 |
 | **12** | `SYNC`| Xung đồng bộ hiển thị | Nối thông giữa 4 IC trên bo mạch (không cần nối ESP32) |
 | **14, 21** | `LED_VDD` | Dương nguồn nuôi LED | Nối nguồn **5V công suất ngoài** |
 | **28, 47** | `LED_VSS` | Mass nguồn LED | Nối GND chung |
@@ -38,11 +38,11 @@ ESP32-C3 sử dụng các chân GPIO an toàn, không vướng cổng nạp USB 
   +------------+                      +------------------+
   |    GND     |--------------------->|  GND (Chân 6)    | <--- Nối chung Mass Nguồn 5V
   |    3.3V    |--------------------->|  VDD (Chân 7)    | (Nguồn logic)
-  |   GPIO 3   |--------------------->|  CLK (Chân 10)   | (Clock chung 4 IC)
-  |   GPIO 4   |--------------------->|  DIO (Chân 9)    | (Data chung 4 IC)
-  |   GPIO 5   |--------------------->|  CS1 (Chân 11 IC1)|
-  |   GPIO 6   |--------------------->|  CS2 (Chân 11 IC2)|
-  |   GPIO 7   |--------------------->|  CS3 (Chân 11 IC3)|
+  |   GPIO 1   |--------------------->|  CLK (Chân 10)   | (Clock chung 4 IC)
+  |   GPIO 0   |--------------------->|  DIO (Chân 9)    | (Data chung 4 IC)
+  |   GPIO 20  |--------------------->|  CS1 (Chân 11 IC1)|
+  |   GPIO 21  |--------------------->|  CS2 (Chân 11 IC2)|
+  |   GPIO 9   |--------------------->|  CS3 (Chân 11 IC3)|
   |   GPIO 10  |--------------------->|  CS4 (Chân 11 IC4)|
   +------------+                      +------------------+
                                       | LED_VDD (14, 21) | <--- (+) Nguồn 5V Ngoài (2A - 5A)

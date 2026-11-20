@@ -8,11 +8,11 @@
  * - GND          -> GND ESP32-C3 & Nguồn 5V
  * - VDD (Logic)  -> 3.3V ESP32-C3
  * - LED_VDD      -> 5V nguồn ngoài (Chân 14, 21 trên IC)
- * - CLK          -> GPIO 3 (Chân 10 trên IC, nối chung 4 IC)
- * - DIO          -> GPIO 4 (Chân 9 trên IC, nối chung 4 IC)
- * - CS1          -> GPIO 5 (Chân 11 của IC 1)
- * - CS2          -> GPIO 6 (Chân 11 của IC 2)
- * - CS3          -> GPIO 7 (Chân 11 của IC 3)
+ * - CLK          -> GPIO 1 (Chân 10 trên IC, nối chung 4 IC)
+ * - DIO          -> GPIO 0 (Chân 9 trên IC, nối chung 4 IC)
+ * - CS1          -> GPIO 20 (Chân 11 của IC 1)
+ * - CS2          -> GPIO 21 (Chân 11 của IC 2)
+ * - CS3          -> GPIO 9 (Chân 11 của IC 3)
  * - CS4          -> GPIO 10 (Chân 11 của IC 4)
  * ============================================================================
  */
@@ -20,10 +20,10 @@
 #include <Arduino.h>
 
 // Định nghĩa chân ESP32-C3
-#define PIN_CLK   3   // Xung Clock (Chân 10)
-#define PIN_DIO   4   // Dữ liệu Data (Chân 9)
+#define PIN_CLK   1   // Xung Clock (Chân 10)
+#define PIN_DIO   0   // Dữ liệu Data (Chân 9)
 
-const int CS_PINS[4] = {5, 6, 7, 10};
+const int CS_PINS[4] = {20, 21, 9, 10};
 
 // Bảng lệnh Holtek HT16D35A
 #define CMD_SOFT_RESET       0x01

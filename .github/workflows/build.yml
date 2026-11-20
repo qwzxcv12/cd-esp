@@ -17,17 +17,27 @@ jobs:
 
       - name: Reconstruct ESP-IDF Project Structure
         run: |
+          # Create ESP-IDF standard directories
           mkdir -p project/main
           mkdir -p project/components
 
+          # Copy main application files
           cp ESP32C3_LEDRBG.cpp project/main/main.cpp || cp main.cpp project/main/main.cpp || true
           cp *.h project/main/ || true
           cp idf_component.yml project/main/ || true
           cp CMakeLists_main.txt project/main/CMakeLists.txt || true
           cp sdkconfig.defaults project/ || true
 
+          # Create root CMakeLists.txt
           printf 'cmake_minimum_required(VERSION 3.16)\ninclude($ENV{IDF_PATH}/tools/cmake/project.cmake)\nproject(ESP32C3_LEDRBG)\n' > project/CMakeLists.txt
 
+          # Copy external components if present
+          if [ -f CMakeLists_hub75.txt ]; then
+            git clone --depth 1 https://github.com/mrfaptastic/ESP32-HUB75-MatrixPanel-I2S-DMA.git project/components/ESP32-HUB75-MatrixPanel-I2S-DMA || true
+            cp CMakeLists_hub75.txt project/components/ESP32-HUB75-MatrixPanel-I2S-DMA/CMakeLists.txt || true
+          fi
+
+          # Build Firmware
           . $IDF_PATH/export.sh
           cd project
           idf.py set-target esp32c3

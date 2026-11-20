@@ -9,11 +9,11 @@
  * - GND          -> GND ESP32-C3 & Mass nguồn 5V
  * - VDD (Logic)  -> 3.3V ESP32-C3 (hoặc 5V ngoài nếu nối chung)
  * - LED_VDD      -> Dương nguồn 5V ngoài (Chân 14, 21 trên IC)
- * - CLK          -> GPIO 3 (Chân 10 trên IC, nối chung cả 4 IC)
- * - DIO          -> GPIO 4 (Chân 9 trên IC, nối chung cả 4 IC)
- * - CS1          -> GPIO 5 (Chân 11 của IC 1 - Master)
- * - CS2          -> GPIO 6 (Chân 11 của IC 2 - Slave 1)
- * - CS3          -> GPIO 7 (Chân 11 của IC 3 - Slave 2)
+ * - CLK          -> GPIO 1 (Chân 10 trên IC, nối chung cả 4 IC)
+ * - DIO          -> GPIO 0 (Chân 9 trên IC, nối chung cả 4 IC)
+ * - CS1          -> GPIO 20 (Chân 11 của IC 1 - Master)
+ * - CS2          -> GPIO 21 (Chân 11 của IC 2 - Slave 1)
+ * - CS3          -> GPIO 9 (Chân 11 của IC 3 - Slave 2)
  * - CS4          -> GPIO 10 (Chân 11 của IC 4 - Slave 3)
  * ============================================================================
  */
@@ -29,12 +29,12 @@
 static const char *TAG = "HT16D35A_ESP32C3";
 
 // --- ĐỊNH NGHĨA CHÂN GPIO CHO ESP32-C3 ---
-#define PIN_CLK         GPIO_NUM_3   // Xung nhịp Clock (Chân 10)
-#define PIN_DIO         GPIO_NUM_4   // Dữ liệu Data (Chân 9)
+#define PIN_CLK         GPIO_NUM_1   // Xung nhịp Clock (Chân 10)
+#define PIN_DIO         GPIO_NUM_0   // Dữ liệu Data (Chân 9)
 
-#define PIN_CS1         GPIO_NUM_5   // Chip Select IC 1 (Master)
-#define PIN_CS2         GPIO_NUM_6   // Chip Select IC 2 (Slave 1)
-#define PIN_CS3         GPIO_NUM_7   // Chip Select IC 3 (Slave 2)
+#define PIN_CS1         GPIO_NUM_20  // Chip Select IC 1 (Master)
+#define PIN_CS2         GPIO_NUM_21  // Chip Select IC 2 (Slave 1)
+#define PIN_CS3         GPIO_NUM_9   // Chip Select IC 3 (Slave 2)
 #define PIN_CS4         GPIO_NUM_10  // Chip Select IC 4 (Slave 3)
 
 #define NUM_ICS         4
