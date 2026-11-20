@@ -222,6 +222,100 @@ static void init_gpio(void) {
 }
 
 // ============================================================================
+// BẢNG FONT CHỮ & CHỮ SỐ CHUẨN 8x8 (NÉT ĐẬM TO RÕ RÀNG)
+// ============================================================================
+static const uint8_t FONT_8X8[][8] = {
+    // 0 .. 9 (index 0 .. 9)
+    {0x3C, 0x66, 0x6E, 0x76, 0x66, 0x66, 0x3C, 0x00}, // 0
+    {0x18, 0x38, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x00}, // 1
+    {0x3C, 0x66, 0x0C, 0x18, 0x30, 0x60, 0x7E, 0x00}, // 2
+    {0x3C, 0x66, 0x0C, 0x1C, 0x0C, 0x66, 0x3C, 0x00}, // 3
+    {0x0C, 0x1C, 0x34, 0x64, 0x7E, 0x0C, 0x0C, 0x00}, // 4
+    {0x7E, 0x60, 0x7C, 0x06, 0x06, 0x66, 0x3C, 0x00}, // 5
+    {0x3C, 0x66, 0x60, 0x7C, 0x66, 0x66, 0x3C, 0x00}, // 6
+    {0x7E, 0x66, 0x0C, 0x18, 0x18, 0x18, 0x18, 0x00}, // 7
+    {0x3C, 0x66, 0x66, 0x3C, 0x66, 0x66, 0x3C, 0x00}, // 8
+    {0x3C, 0x66, 0x66, 0x3E, 0x06, 0x66, 0x3C, 0x00}, // 9
+
+    // A .. Z (index 10 .. 35)
+    {0x3C, 0x66, 0x66, 0x7E, 0x66, 0x66, 0x66, 0x00}, // A
+    {0x7C, 0x66, 0x66, 0x7C, 0x66, 0x66, 0x7C, 0x00}, // B
+    {0x3C, 0x66, 0x60, 0x60, 0x60, 0x66, 0x3C, 0x00}, // C
+    {0x78, 0x6C, 0x66, 0x66, 0x66, 0x6C, 0x78, 0x00}, // D
+    {0x7E, 0x60, 0x60, 0x7C, 0x60, 0x60, 0x7E, 0x00}, // E
+    {0x7E, 0x60, 0x60, 0x7C, 0x60, 0x60, 0x60, 0x00}, // F
+    {0x3C, 0x66, 0x60, 0x6E, 0x66, 0x66, 0x3A, 0x00}, // G
+    {0x66, 0x66, 0x66, 0x7E, 0x66, 0x66, 0x66, 0x00}, // H
+    {0x7E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x00}, // I
+    {0x1E, 0x0C, 0x0C, 0x0C, 0x0C, 0x6C, 0x38, 0x00}, // J
+    {0x66, 0x6C, 0x78, 0x70, 0x78, 0x6C, 0x66, 0x00}, // K
+    {0x60, 0x60, 0x60, 0x60, 0x60, 0x60, 0x7E, 0x00}, // L
+    {0x63, 0x77, 0x7F, 0x6B, 0x63, 0x63, 0x63, 0x00}, // M
+    {0x66, 0x76, 0x7E, 0x7E, 0x6E, 0x66, 0x66, 0x00}, // N
+    {0x3C, 0x66, 0x66, 0x66, 0x66, 0x66, 0x3C, 0x00}, // O
+    {0x7C, 0x66, 0x66, 0x7C, 0x60, 0x60, 0x60, 0x00}, // P
+    {0x3C, 0x66, 0x66, 0x66, 0x6E, 0x3C, 0x0E, 0x00}, // Q
+    {0x7C, 0x66, 0x66, 0x7C, 0x78, 0x6C, 0x66, 0x00}, // R
+    {0x3C, 0x66, 0x60, 0x3C, 0x06, 0x66, 0x3C, 0x00}, // S
+    {0x7E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00}, // T
+    {0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x3C, 0x00}, // U
+    {0x66, 0x66, 0x66, 0x66, 0x3C, 0x3C, 0x18, 0x00}, // V
+    {0x63, 0x63, 0x63, 0x6B, 0x7F, 0x77, 0x63, 0x00}, // W
+    {0x66, 0x66, 0x3C, 0x18, 0x3C, 0x66, 0x66, 0x00}, // X
+    {0x66, 0x66, 0x66, 0x3C, 0x18, 0x18, 0x18, 0x00}, // Y
+    {0x7E, 0x06, 0x0C, 0x18, 0x30, 0x60, 0x7E, 0x00}, // Z
+
+    // Ký tự đặc biệt: space, dash, colon (index 36, 37, 38)
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Space
+    {0x00, 0x00, 0x00, 0x7E, 0x7E, 0x00, 0x00, 0x00}, // -
+    {0x00, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00}  // :
+};
+
+static const uint8_t* get_font_char(char c) {
+    if (c >= '0' && c <= '9') return FONT_8X8[c - '0'];
+    if (c >= 'A' && c <= 'Z') return FONT_8X8[10 + (c - 'A')];
+    if (c >= 'a' && c <= 'z') return FONT_8X8[10 + (c - 'a')];
+    if (c == '-') return FONT_8X8[37];
+    if (c == ':') return FONT_8X8[38];
+    return FONT_8X8[36]; // Space
+}
+
+// Vẽ 1 ký tự TO RÕ RÀNG phóng to 3x chiếm trọn 1 IC (24 dòng LED x 8 cột)
+static void draw_char_big(uint8_t ic, char c, uint8_t brightness) {
+    if (ic >= NUM_ICS) return;
+    const uint8_t *glyph = get_font_char(c);
+    
+    // Xóa sạch IC này trong framebuffer
+    for (int i = 0; i < BYTES_PER_IC; i++) {
+        fb[ic][i] = 0;
+    }
+
+    // Phóng to 3x theo chiều dọc (8 dòng font -> 24 dòng LED từ dòng 2 đến 25)
+    for (int r = 0; r < 8; r++) {
+        uint8_t row_bits = glyph[r];
+        int base_row = 2 + r * 3;
+        for (int c_idx = 0; c_idx < 8; c_idx++) {
+            if (row_bits & (1 << (7 - c_idx))) {
+                fb_set_pixel(ic, base_row,     c_idx, brightness);
+                fb_set_pixel(ic, base_row + 1, c_idx, brightness);
+                fb_set_pixel(ic, base_row + 2, c_idx, brightness);
+            }
+        }
+    }
+}
+
+// Hiển thị 4 ký tự TO cùng lúc trên 4 IC độc lập
+static void display_text_4chars(const char *str) {
+    fb_clear();
+    for (int i = 0; i < NUM_ICS; i++) {
+        if (str[i] != '\0') {
+            draw_char_big(i, str[i], 0xFF);
+        }
+    }
+    fb_render();
+}
+
+// ============================================================================
 // CÁC HIỆU ỨNG HÌNH ẢNH (VISUAL ANIMATION EFFECTS)
 // ============================================================================
 
@@ -377,9 +471,51 @@ static void effect_checkerboard(int duration_ms) {
     }
 }
 
-// Task chạy thử nghiệm kiểm tra mạch LED với các hiệu ứng
+// ============================================================================
+// CHƯƠNG TRÌNH TEST HIỂN THỊ CHỮ SỐ & CHỮ CÁI TO RÕ RÀNG
+// ============================================================================
+
+// 1. Đếm các số to từ 1 đến 9 trên cả 4 IC
+static void test_digits_1_to_9_big(void) {
+    ESP_LOGI(TAG, "=== HIEN THI CAC SO TU 1 DEN 9 (TO RO RANG TREN 4 IC) ===");
+    for (char c = '1'; c <= '9'; c++) {
+        ESP_LOGI(TAG, "-> So to: %c", c);
+        char buf[5] = {c, c, c, c, '\0'};
+        display_text_4chars(buf);
+        vTaskDelay(pdMS_TO_TICKS(1200));
+    }
+}
+
+// 2. Hiển thị nhóm 4 số và 4 chữ cái (Mỗi IC hiển thị 1 ký tự to)
+static void test_groups_4chars(void) {
+    ESP_LOGI(TAG, "=== HIEN THI NHOM 4 SO VA CHU CAI TO ===");
+    const char *groups[] = {
+        "1234", "5678", "9012",
+        "ABCD", "EFGH", "IJKL",
+        "MNOP", "QRST", "UVWX", "YZ--"
+    };
+    int n = sizeof(groups) / sizeof(groups[0]);
+    for (int i = 0; i < n; i++) {
+        ESP_LOGI(TAG, "-> Nhom ky tu to: %s", groups[i]);
+        display_text_4chars(groups[i]);
+        vTaskDelay(pdMS_TO_TICKS(1800));
+    }
+}
+
+// 3. Hiển thị từng chữ cái to từ A đến Z trên cả 4 IC
+static void test_letters_A_to_Z(void) {
+    ESP_LOGI(TAG, "=== HIEN THI CAC CHU CAI TU A DEN Z (TO RO RANG) ===");
+    for (char c = 'A'; c <= 'Z'; c++) {
+        ESP_LOGI(TAG, "-> Chu cai: %c", c);
+        char buf[5] = {c, c, c, c, '\0'};
+        display_text_4chars(buf);
+        vTaskDelay(pdMS_TO_TICKS(800));
+    }
+}
+
+// Task chạy thử nghiệm kiểm tra mạch LED với các hiệu ứng và chữ số to
 static void led_test_task(void *pvParameters) {
-    ESP_LOGI(TAG, "=== BAT DAU TEST MA TRAN LED 4x HT16D35A (ANIMATION SUITE) ===");
+    ESP_LOGI(TAG, "=== BAT DAU TEST MA TRAN LED: SO 1-9 & CHU CAI TO RO RANG ===");
 
     for (int i = 0; i < NUM_ICS; i++) {
         init_ht16d35a(i);
@@ -389,12 +525,17 @@ static void led_test_task(void *pvParameters) {
     set_global_brightness(63);
 
     while (1) {
-        effect_wave_scan(7000);        // 1. Quét vệt sóng ánh sáng qua 4 IC (7s)
-        effect_breathing(5000);        // 2. Nhịp thở toàn ma trận (5s)
-        effect_matrix_rain(7000);      // 3. Mưa số sao băng rơi (7s)
-        effect_equalizer(7000);        // 4. Sóng nhạc VU-meter 32 cột (7s)
-        effect_twinkling_stars(7000);  // 5. Sao lấp lánh (7s)
-        effect_checkerboard(4000);     // 6. Bàn cờ đan xen (4s)
+        test_digits_1_to_9_big();      // 1. Đếm số to 1 -> 9 trên màn hình
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        test_groups_4chars();          // 2. Nhóm 4 số & chữ cái: 1234, 5678, ABCD, EFGH...
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        test_letters_A_to_Z();         // 3. Từng chữ cái to A -> Z
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        effect_wave_scan(4000);        // Đan xen hiệu ứng sóng ánh sáng 4s
+        effect_matrix_rain(4000);      // Đan xen hiệu ứng mưa rơi 4s
     }
 }
 
