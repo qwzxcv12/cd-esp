@@ -25,54 +25,58 @@
 
 const int CS_PINS[4] = {20, 21, 9, 10};
 
-// Bảng lệnh Holtek HT16D35A chuẩn Datasheet
-#define CMD_SOFT_RESET       0x00
-#define CMD_BINARY_GRAY      0x31
-#define CMD_COM_NUM          0x32
-#define CMD_CASCADE_MODE     0x34
-#define CMD_SYS_CONTROL      0x35
-#define CMD_CURRENT_RATIO    0x36
-#define CMD_BRIGHTNESS       0x37
-#define CMD_FUNCTION_ENABLE  0x38
+// Bảng lệnh Holtek HT16D35A chuẩn Pimoroni / Holtek
+#define CMD_SOFT_RESET       0xCC
+#define CMD_SOFT_RESET_ALT   0x00
+#define CMD_GLOBAL_BRIGHTNESS 0x37
+#define CMD_SCROLL_CTRL      0x20
+#define CMD_COM_PIN_CTRL     0x41
+#define CMD_ROW_PIN_CTRL     0x42
+#define CMD_SYSTEM_CTRL      0x35
 #define CMD_WRITE_DDRAM      0x80
 
 void writeByte(uint8_t data) {
   for (int i = 7; i >= 0; i--) {
     digitalWrite(PIN_CLK, LOW);
     digitalWrite(PIN_DIO, (data & (1 << i)) ? HIGH : LOW);
-    delayMicroseconds(4);
+    delayMicroseconds(2);
     digitalWrite(PIN_CLK, HIGH);
-    delayMicroseconds(4);
+    delayMicroseconds(2);
   }
   digitalWrite(PIN_CLK, LOW);
-  delayMicroseconds(2);
+  delayMicroseconds(1);
 }
 
-void sendCommand(uint8_t icIndex, uint8_t cmd, uint8_t param) {
+void sendCmd1b(uint8_t icIndex, uint8_t cmd) {
   digitalWrite(CS_PINS[icIndex], LOW);
   delayMicroseconds(5);
   writeByte(cmd);
-  writeByte(param);
   delayMicroseconds(5);
   digitalWrite(CS_PINS[icIndex], HIGH);
   delayMicroseconds(5);
 }
 
-void initHT16D35A(uint8_t icIndex) {
+void sendCmd2b(uint8_t icIndex, uint8_t cmd, uint8_t p1) {
   digitalWrite(CS_PINS[icIndex], LOW);
   delayMicroseconds(5);
-  writeByte(CMD_SOFT_RESET);
+  writeByte(cmd);
+  writeByte(p1);
   delayMicroseconds(5);
   digitalWrite(CS_PINS[icIndex], HIGH);
-  delay(20);
+  delayMicroseconds(5);
+}
 
-  sendCommand(icIndex, CMD_CASCADE_MODE, 0x01);    // IRC Master Mode
-  sendCommand(icIndex, CMD_SYS_CONTROL, 0x03);     // Bật OSC & Display
-  sendCommand(icIndex, CMD_COM_NUM, 0x07);         // Kích hoạt COM0..COM7
-  sendCommand(icIndex, CMD_CURRENT_RATIO, 0x07);   // Cực đại dòng LED
-  sendCommand(icIndex, CMD_BRIGHTNESS, 0x3F);      // Độ sáng tối đa
-  sendCommand(icIndex, CMD_BINARY_GRAY, 0x01);     // Binary Mode
-  sendCommand(icIndex, CMD_FUNCTION_ENABLE, 0x00); // Tắt Masking
+void sendCmd5b(uint8_t icIndex, uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
+  digitalWrite(CS_PINS[icIndex], LOW);
+  delayMicroseconds(5);
+  writeByte(cmd);
+  writeByte(p1);
+  writeByte(p2);
+  writeByte(p3);
+  writeByte(p4);
+  delayMicroseconds(5);
+  digitalWrite(CS_PINS[icIndex], HIGH);
+  delayMicroseconds(5);
 }
 
 void fillDisplay(uint8_t icIndex, uint8_t pattern) {
@@ -86,6 +90,23 @@ void fillDisplay(uint8_t icIndex, uint8_t pattern) {
   delayMicroseconds(5);
   digitalWrite(CS_PINS[icIndex], HIGH);
   delayMicroseconds(5);
+}
+
+void initHT16D35A(uint8_t icIndex) {
+  sendCmd1b(icIndex, CMD_SOFT_RESET);
+  delay(10);
+  sendCmd1b(icIndex, CMD_SOFT_RESET_ALT);
+  delay(10);
+
+  sendCmd2b(icIndex, CMD_GLOBAL_BRIGHTNESS, 0x3F);
+  sendCmd2b(icIndex, CMD_SCROLL_CTRL, 0x00);
+  sendCmd2b(icIndex, CMD_SYSTEM_CTRL, 0x00);
+
+  fillDisplay(icIndex, 0xFF);
+
+  sendCmd2b(icIndex, CMD_COM_PIN_CTRL, 0xFF);
+  sendCmd5b(icIndex, CMD_ROW_PIN_CTRL, 0xFF, 0xFF, 0xFF, 0xFF);
+  sendCmd2b(icIndex, CMD_SYSTEM_CTRL, 0x03);
 }
 
 void setup() {

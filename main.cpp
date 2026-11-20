@@ -40,15 +40,14 @@ static const char *TAG = "HT16D35A_ESP32C3";
 #define NUM_ICS         4
 static const gpio_num_t CS_PINS[NUM_ICS] = {PIN_CS1, PIN_CS2, PIN_CS3, PIN_CS4};
 
-// --- BẢNG MÃ LỆNH CHUẨN DATASHEET HT16D35A ---
-#define CMD_SOFT_RESET       0x00 // Software Reset (1 byte)
-#define CMD_BINARY_GRAY      0x31 // Binary Mode (0x01) hoặc Gray Mode (0x00)
-#define CMD_COM_NUM          0x32 // Cài đặt số COM (0x07 = kích hoạt COM0..COM7)
-#define CMD_CASCADE_MODE     0x34 // Master / Slave & Clock Source (0x01 = IRC Master)
-#define CMD_SYS_CONTROL      0x35 // Oscillator & Display ON/OFF (0x03 = Osc ON + Display ON)
-#define CMD_CURRENT_RATIO    0x36 // Constant Current Ratio (0x07 = Max current 8/8)
-#define CMD_BRIGHTNESS       0x37 // Cài đặt độ sáng PWM (0x3F = 63 max PWM)
-#define CMD_FUNCTION_ENABLE  0x38 // Function Enable (0x00 = Fade/Blink/Mask OFF)
+// --- BẢNG MÃ LỆNH CHUẨN THỰC TẾ HT16D35A (Holtek / Pimoroni) ---
+#define CMD_SOFT_RESET       0xCC // Lệnh Reset mềm thực tế của HT16D35A
+#define CMD_SOFT_RESET_ALT   0x00 // Lệnh Reset mềm phụ
+#define CMD_GLOBAL_BRIGHTNESS 0x37 // Cài đặt độ sáng PWM (0x3F = 63 max PWM)
+#define CMD_SCROLL_CTRL      0x20 // Điều khiển cuộn (0x00 = tắt cuộn)
+#define CMD_COM_PIN_CTRL     0x41 // BẬT CỔNG COM (0xFF = mở COM0..COM7)
+#define CMD_ROW_PIN_CTRL     0x42 // BẬT CỔNG ROW (4 bytes 0xFF = mở ROW0..ROW27)
+#define CMD_SYSTEM_CTRL      0x35 // Bật Osc và Display (0x03 = Osc ON + Display ON)
 #define CMD_WRITE_DDRAM      0x80 // Ghi dữ liệu vào RAM hiển thị (DDRAM)
 
 // Hàm trễ microsecond dùng ROM function cho độ chính xác cao
@@ -61,58 +60,50 @@ static void write_byte(uint8_t data) {
     for (int i = 7; i >= 0; i--) {
         gpio_set_level(PIN_CLK, 0);
         gpio_set_level(PIN_DIO, (data & (1 << i)) ? 1 : 0);
-        delay_us(4);
+        delay_us(2);
         gpio_set_level(PIN_CLK, 1);
-        delay_us(4);
+        delay_us(2);
     }
     gpio_set_level(PIN_CLK, 0);
-    delay_us(2);
+    delay_us(1);
 }
 
-// Gửi 1 lệnh điều khiển (Mã lệnh + Tham số) tới IC chỉ định
-static void send_command(uint8_t ic_idx, uint8_t cmd, uint8_t param) {
+// Gửi lệnh đơn (1 byte)
+static void send_cmd_1b(uint8_t ic_idx, uint8_t cmd) {
     if (ic_idx >= NUM_ICS) return;
     gpio_set_level(CS_PINS[ic_idx], 0);
     delay_us(5);
     write_byte(cmd);
-    write_byte(param);
     delay_us(5);
     gpio_set_level(CS_PINS[ic_idx], 1);
     delay_us(5);
 }
 
-// Khởi tạo một IC HT16D35A
-static void init_ht16d35a(uint8_t ic_idx) {
-    // 1. Reset mềm IC (Lệnh 0x00)
+// Gửi lệnh 2 bytes (Mã lệnh + 1 tham số)
+static void send_cmd_2b(uint8_t ic_idx, uint8_t cmd, uint8_t p1) {
+    if (ic_idx >= NUM_ICS) return;
     gpio_set_level(CS_PINS[ic_idx], 0);
     delay_us(5);
-    write_byte(CMD_SOFT_RESET);
+    write_byte(cmd);
+    write_byte(p1);
     delay_us(5);
     gpio_set_level(CS_PINS[ic_idx], 1);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    delay_us(5);
+}
 
-    // 2. Chế độ dao động nội IRC (0x01) để tất cả IC đều tự phát xung hoạt động độc lập
-    send_command(ic_idx, CMD_CASCADE_MODE, 0x01);
-
-    // 3. Bật bộ dao động hệ thống và bật hiển thị LED (0x03 = Osc ON + Display ON)
-    send_command(ic_idx, CMD_SYS_CONTROL, 0x03);
-
-    // 4. Kích hoạt toàn bộ COM0 -> COM7 (0x07 = 8 COM pins active)
-    send_command(ic_idx, CMD_COM_NUM, 0x07);
-
-    // 5. Cấu hình dòng cực đại cho ROW (Level 7 = 8/8 full current sink)
-    send_command(ic_idx, CMD_CURRENT_RATIO, 0x07);
-
-    // 6. Cài đặt độ sáng PWM tối đa (0x3F = 63/63)
-    send_command(ic_idx, CMD_BRIGHTNESS, 0x3F);
-
-    // 7. Chọn chế độ Binary Mode (0x01)
-    send_command(ic_idx, CMD_BINARY_GRAY, 0x01);
-
-    // 8. Tắt chức năng Mask / Blink / Fade để màn hình hiển thị trực tiếp
-    send_command(ic_idx, CMD_FUNCTION_ENABLE, 0x00);
-
-    ESP_LOGI(TAG, "IC %d: Da khoi tao thanh cong voi day du lenh chuan Datasheet", ic_idx + 1);
+// Gửi lệnh 5 bytes (Mã lệnh + 4 tham số, dùng cho ROW PIN CTRL 0x42)
+static void send_cmd_5b(uint8_t ic_idx, uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
+    if (ic_idx >= NUM_ICS) return;
+    gpio_set_level(CS_PINS[ic_idx], 0);
+    delay_us(5);
+    write_byte(cmd);
+    write_byte(p1);
+    write_byte(p2);
+    write_byte(p3);
+    write_byte(p4);
+    delay_us(5);
+    gpio_set_level(CS_PINS[ic_idx], 1);
+    delay_us(5);
 }
 
 // Ghi toàn bộ Display Data RAM của một IC (224 vị trí: 28 ROW x 8 COM)
@@ -124,7 +115,7 @@ static void fill_display(uint8_t ic_idx, uint8_t pattern) {
     write_byte(CMD_WRITE_DDRAM); // Lệnh ghi RAM (0x80)
     write_byte(0x00);            // Bắt đầu từ địa chỉ 0x00
 
-    // Ghi dữ liệu 224 bytes phủ kín toàn bộ RAM (hỗ trợ cả Binary Mode lẫn Gray Mode)
+    // Ghi dữ liệu 224 bytes phủ kín toàn bộ RAM
     for (int i = 0; i < 224; i++) {
         write_byte(pattern);
     }
@@ -132,6 +123,38 @@ static void fill_display(uint8_t ic_idx, uint8_t pattern) {
     delay_us(5);
     gpio_set_level(CS_PINS[ic_idx], 1);
     delay_us(5);
+}
+
+// Khởi tạo một IC HT16D35A
+static void init_ht16d35a(uint8_t ic_idx) {
+    // 1. Reset mềm IC
+    send_cmd_1b(ic_idx, CMD_SOFT_RESET);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    send_cmd_1b(ic_idx, CMD_SOFT_RESET_ALT);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    // 2. Cài đặt độ sáng PWM tối đa (0x37 -> 0x3F)
+    send_cmd_2b(ic_idx, CMD_GLOBAL_BRIGHTNESS, 0x3F);
+
+    // 3. Tắt chức năng cuộn màn hình (0x20 -> 0x00)
+    send_cmd_2b(ic_idx, CMD_SCROLL_CTRL, 0x00);
+
+    // 4. Tạm tắt System Control để nạp cấu hình cổng (0x35 -> 0x00)
+    send_cmd_2b(ic_idx, CMD_SYSTEM_CTRL, 0x00);
+
+    // 5. Nạp dữ liệu ban đầu vào toàn bộ DDRAM (0xFF để sáng)
+    fill_display(ic_idx, 0xFF);
+
+    // 6. [CỰC KỲ QUAN TRỌNG] BẬT TOÀN BỘ CỔNG COM: 0x41 -> 0xFF (COM0..COM7)
+    send_cmd_2b(ic_idx, CMD_COM_PIN_CTRL, 0xFF);
+
+    // 7. [CỰC KỲ QUAN TRỌNG] BẬT TOÀN BỘ CỔNG ROW: 0x42 -> 0xFF, 0xFF, 0xFF, 0xFF (ROW0..ROW27)
+    send_cmd_5b(ic_idx, CMD_ROW_PIN_CTRL, 0xFF, 0xFF, 0xFF, 0xFF);
+
+    // 8. BẬT BỘ DAO ĐỘNG HỆ THỐNG VÀ BẬT HIỂN THỊ (0x35 -> 0x03)
+    send_cmd_2b(ic_idx, CMD_SYSTEM_CTRL, 0x03);
+
+    ESP_LOGI(TAG, "IC %d: Khoi tao thanh cong voi COM PIN CTRL (0x41) va ROW PIN CTRL (0x42)", ic_idx + 1);
 }
 
 // Cấu hình các chân GPIO của ESP32-C3
