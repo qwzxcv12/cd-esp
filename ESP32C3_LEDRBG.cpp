@@ -1,21 +1,7 @@
 /**
  * ============================================================================
- * DỰ ÁN: TEST TỪNG BÓNG LED TRÊN MA TRẬN 16x16 (4x HT16D35A)
+ * DỰ ÁN: SCAN TẤT CẢ 28 ĐỊA CHỈ ROW (0..27) VÀ TOÀN BỘ MA TRẬN 16x16
  * Thư mục: D:\thien\01_DuAn_Code\espc3 - led
- * Framework: ESP-IDF v5.1+ (Build & Flash tự động qua cloud_builder.py)
- * ============================================================================
- * 
- * PHẦN CỨNG CHUẨN XÁC 100% THEO SILKSCREEN TRÊN MẠCH:
- * - Ma trận vật lý: 16 cột x 16 hàng (tổng cộng 256 bóng LED)
- * - Mỗi IC quản lý 4 cột x 16 hàng = 64 bóng LED (Ma trận 8 ROW x 8 COM):
- *   + Nửa dưới (Hàng 0..7): ROW 0..3, COM 0..7
- *   + Nửa trên  (Hàng 8..15): ROW 4..7, COM 0..7
- * 
- * PHÂN BỔ 4 IC:
- * - IC 1 (CS1 - GPIO 20): Cột 0..3   (LED D400 đến D463)
- * - IC 2 (CS2 - GPIO 21): Cột 4..7   (LED D500 đến D563)
- * - IC 3 (CS3 - GPIO 9):  Cột 8..11  (LED D600 đến D663)
- * - IC 4 (CS4 - GPIO 10): Cột 12..15 (LED D700 đến D763)
  * ============================================================================
  */
 
@@ -29,7 +15,7 @@
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 
-static const char *TAG = "TEST_LED_16X16";
+static const char *TAG = "HT16D35A_SCAN";
 
 // --- CHÂN GPIO ESP32-C3 ---
 #define PIN_CLK         GPIO_NUM_1
@@ -42,9 +28,6 @@ static const char *TAG = "TEST_LED_16X16";
 
 #define NUM_ICS         4
 static const gpio_num_t CS_PINS[NUM_ICS] = {PIN_CS1, PIN_CS2, PIN_CS3, PIN_CS4};
-
-// Đảo chiều COM bit nếu thứ tự chạy từ trên xuống dưới thay vì từ dưới lên trên
-#define COM_BIT_INVERT  0
 
 // --- MÃ LỆNH HOLTEK HT16D35A ---
 #define CMD_SOFT_RESET          0xCC
@@ -183,214 +166,77 @@ static void init_gpio(void) {
 }
 
 // ============================================================================
-// HÀM BẬT CHÍNH XÁC 1 BÓNG LED THEO TÊN (D400..D463, D500..D563, ...)
+// BÀI TEST 1: BẬT SÁNG TOÀN BỘ 100% CẢ 28 ĐỊA CHỈ ROW (256 BÓNG) TRÊN 4 IC
 // ============================================================================
-/**
- * @param ic: 0 (IC1: D400..), 1 (IC2: D500..), 2 (IC3: D600..), 3 (IC4: D700..)
- * @param k: Vị trí LED từ 0 đến 63 trong IC đó
- */
-static void light_single_led(uint8_t ic, uint8_t k) {
-    fb_clear();
-    if (ic >= NUM_ICS || k >= 64) return;
-
-    uint8_t c = k / 16;  // Cột trong IC (0..3)
-    uint8_t r = k % 16;  // Hàng trong cột (0..15: 0 ở dưới, 15 ở trên)
-
-    // Kiến trúc 8x8 per IC:
-    // Nửa dưới (r < 8):  ROW = c,     COM = r (hoặc 7 - r)
-    // Nửa trên  (r >= 8): ROW = c + 4, COM = (r - 8)
-    uint8_t row_addr = (r < 8) ? c : (c + 4);
-    uint8_t com_sub  = (r < 8) ? r : (r - 8);
-
-#if COM_BIT_INVERT
-    uint8_t com_bit = 7 - com_sub;
-#else
-    uint8_t com_bit = com_sub;
-#endif
-
-    fb[ic][row_addr] = (1 << com_bit);
-    fb_render();
-}
-
-// ============================================================================
-// BÀI TEST 1: SÁNG TUẦN TỰ TỪNG BÓNG LED THEO ĐÚNG YÊU CẦU CỦA BẠN
-// D400 -> D463 (IC 1)
-// D500 -> D563 (IC 2)
-// D600 -> D663 (IC 3)
-// D700 -> D763 (IC 4)
-// ============================================================================
-static void test_step_by_step_leds(void) {
+static void test_turn_all_28_rows_on(void) {
     ESP_LOGI(TAG, "==========================================================");
-    ESP_LOGI(TAG, "BAT DAU TEST TUNG BONG LED THEO DUNG THU TU SILKSCREEN:");
-    ESP_LOGI(TAG, "IC 1: D400 -> D463 | IC 2: D500 -> D563");
-    ESP_LOGI(TAG, "IC 3: D600 -> D663 | IC 4: D700 -> D763");
+    ESP_LOGI(TAG, "TEST 1: SANG TOAN BO TAT CA 28 ROW PINS (0..27) CUA CA 4 IC");
     ESP_LOGI(TAG, "==========================================================");
-
-    for (int ic = 0; ic < NUM_ICS; ic++) {
-        int base_name = 400 + ic * 100;
-        ESP_LOGI(TAG, ">>> BAT DAU IC %d (CS: GPIO %d): D%03d DEN D%03d <<<", 
-                 ic + 1, CS_PINS[ic], base_name, base_name + 63);
-
-        for (int k = 0; k < 64; k++) {
-            light_single_led(ic, k);
-
-            int led_num = base_name + k;
-            int chip_col = k / 16;
-            int screen_col = ic * 4 + chip_col;
-            int row = k % 16;
-            int row_addr = (row < 8) ? chip_col : (chip_col + 4);
-            int com_bit  = (row < 8) ? row : (row - 8);
-
-            ESP_LOGI(TAG, "LED D%03d [IC%d | Col:%02d | Row:%02d | Addr:%d | Bit:%d]",
-                     led_num, ic + 1, screen_col, row, row_addr, com_bit);
-
-            vTaskDelay(pdMS_TO_TICKS(80)); // 80ms mỗi bóng (vừa mắt nhìn, dễ theo dõi)
-        }
-        vTaskDelay(pdMS_TO_TICKS(600));
-    }
-}
-
-// ============================================================================
-// BÀI TEST 2: QUÉT TỪNG CỘT 16 BÓNG TỪ TRÁI SANG PHẢI (CỘT 0 -> 15)
-// ============================================================================
-static void test_column_sweep(void) {
-    ESP_LOGI(TAG, "=== TEST QUET TUNG COT 16 BONG (COT 0 -> 15) ===");
-    for (int col = 0; col < 16; col++) {
-        fb_clear();
-        uint8_t ic = col / 4;
-        uint8_t c = col % 4;
-
-        // Bật toàn bộ 16 bóng của cột này (8 bóng nửa dưới + 8 bóng nửa trên)
-        fb[ic][c]     = 0xFF; // ROW c     (Hàng 0..7)
-        fb[ic][c + 4] = 0xFF; // ROW c + 4 (Hàng 8..15)
-
-        fb_render();
-
-        int base = 400 + ic * 100 + c * 16;
-        ESP_LOGI(TAG, "-> Cot man hinh %02d (IC %d): LED D%03d den D%03d",
-                 col, ic + 1, base, base + 15);
-
-        vTaskDelay(pdMS_TO_TICKS(250));
-    }
     fb_clear();
-    fb_render();
-    vTaskDelay(pdMS_TO_TICKS(400));
-}
-
-// ============================================================================
-// BÀI TEST 3: SÁNG TOÀN BỘ 64 BÓNG CỦA TỪNG IC (ĐỂ KIỂM TRA ĐỦ 4 KHỐI)
-// ============================================================================
-static void test_block_each_ic(void) {
-    ESP_LOGI(TAG, "=== TEST SANG TOAN BO 64 BONG CUA TUNG IC ===");
     for (int ic = 0; ic < NUM_ICS; ic++) {
-        fb_clear();
-        int base = 400 + ic * 100;
-        ESP_LOGI(TAG, "-> Sang toan bo 64 LED cua IC %d (D%03d den D%03d)", ic + 1, base, base + 63);
-
-        // Bật cả 8 ROW (0..7) với toàn bộ 8 bit COM (0xFF)
-        for (int r = 0; r < 8; r++) {
-            fb[ic][r] = 0xFF;
+        for (int r = 0; r < NUM_ROWS_PER_IC; r++) {
+            fb[ic][r] = 0xFF; // Bật hết tất cả 8 bit COM của tất cả 28 ROW
         }
-        fb_render();
-        vTaskDelay(pdMS_TO_TICKS(1200));
     }
+    fb_render();
+    vTaskDelay(pdMS_TO_TICKS(3000)); // Giữ sáng 3 giây để nhìn toàn bộ mạch
     fb_clear();
     fb_render();
     vTaskDelay(pdMS_TO_TICKS(500));
 }
 
 // ============================================================================
-// BÀI TEST 4: SÁNG TOÀN BỘ MA TRẬN 16x16 (256 BÓNG)
+// BÀI TEST 2: QUÉT TỪNG ĐỊA CHỈ ROW TỪ 0 ĐẾN 27 TRÊN IC 1 (CS1 - GPIO 20)
+// Mỗi bước bật cả 8 bit COM (0xFF) của đúng 1 hàng ROW để xác định vị trí
 // ============================================================================
-static void test_all_matrix_on(void) {
-    ESP_LOGI(TAG, "=== TEST SANG TOAN BO 256 BONG MA TRAN 16x16 ===");
+static void test_scan_all_28_rows_ic1(void) {
+    ESP_LOGI(TAG, "==========================================================");
+    ESP_LOGI(TAG, "TEST 2: QUET DÒ TUNG ROW ADDRESS (0 DEN 27) TREN IC 1");
+    ESP_LOGI(TAG, "==========================================================");
+
+    for (int r = 0; r < NUM_ROWS_PER_IC; r++) {
+        fb_clear();
+        fb[0][r] = 0xFF; // Bật 8 bóng của ROW address này trên IC 1
+        fb_render();
+
+        ESP_LOGI(TAG, ">>> IC 1 (D400..D463): ROW ADDRESS = %02d (0x%02X) DANG SANG 8 BONG <<<", r, r);
+        vTaskDelay(pdMS_TO_TICKS(400)); // 400ms mỗi hàng
+    }
+
     fb_clear();
-    for (int ic = 0; ic < NUM_ICS; ic++) {
-        for (int r = 0; r < 8; r++) {
+    fb_render();
+    vTaskDelay(pdMS_TO_TICKS(1000));
+}
+
+// ============================================================================
+// BÀI TEST 3: QUÉT ĐỒNG LOẠT TỪNG ROW (0..27) TRÊN CẢ 4 IC CÙNG LÚC
+// ============================================================================
+static void test_scan_all_28_rows_all_ics(void) {
+    ESP_LOGI(TAG, "==========================================================");
+    ESP_LOGI(TAG, "TEST 3: QUET ROW (0..27) DONG LOAT TREN CA 4 IC");
+    ESP_LOGI(TAG, "==========================================================");
+
+    for (int r = 0; r < NUM_ROWS_PER_IC; r++) {
+        fb_clear();
+        for (int ic = 0; ic < NUM_ICS; ic++) {
             fb[ic][r] = 0xFF;
         }
+        fb_render();
+
+        ESP_LOGI(TAG, ">>> CA 4 IC: ROW ADDRESS = %02d (0x%02X) DANG SANG <<<", r, r);
+        vTaskDelay(pdMS_TO_TICKS(400));
     }
-    fb_render();
-    vTaskDelay(pdMS_TO_TICKS(2000));
+
     fb_clear();
     fb_render();
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
 // ============================================================================
-// HỆ TỌA ĐỘ 16x16 CHUẨN XÁC
+// TASK CHÍNH
 // ============================================================================
-/**
- * Đặt điểm ảnh (X, Y) trên hệ tọa độ chuẩn 16x16:
- * X: 0 (Cột bên trái D400..D415) -> 15 (Cột bên phải D748..D763)
- * Y: 0 (Hàng trên cùng D415, D431..) -> 15 (Hàng dưới cùng D400, D416..)
- */
-static void set_pixel_grid_16x16(int x, int y, bool on) {
-    if (x < 0 || x >= 16 || y < 0 || y >= 16) return;
-
-    uint8_t ic = x / 4;
-    uint8_t c = x % 4;
-
-    // Y=0 là đỉnh (hàng 15 silkscreen), Y=15 là đáy (hàng 0 silkscreen)
-    uint8_t silkscreen_row = 15 - y;
-
-    uint8_t row_addr = (silkscreen_row < 8) ? c : (c + 4);
-    uint8_t com_sub  = (silkscreen_row < 8) ? silkscreen_row : (silkscreen_row - 8);
-
-#if COM_BIT_INVERT
-    uint8_t com_bit = 7 - com_sub;
-#else
-    uint8_t com_bit = com_sub;
-#endif
-
-    if (on) {
-        fb[ic][row_addr] |= (1 << com_bit);
-    } else {
-        fb[ic][row_addr] &= ~(1 << com_bit);
-    }
-}
-
-// Bảng Font 8x8 chuẩn
-static const uint8_t FONT_8X8[10][8] = {
-    {0x3C, 0x66, 0x6E, 0x76, 0x66, 0x66, 0x3C, 0x00}, // 0
-    {0x18, 0x38, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x00}, // 1
-    {0x3C, 0x66, 0x0C, 0x18, 0x30, 0x60, 0x7E, 0x00}, // 2
-    {0x3C, 0x66, 0x0C, 0x1C, 0x0C, 0x66, 0x3C, 0x00}, // 3
-    {0x0C, 0x1C, 0x34, 0x64, 0x7E, 0x0C, 0x0C, 0x00}, // 4
-    {0x7E, 0x60, 0x7C, 0x06, 0x06, 0x66, 0x3C, 0x00}, // 5
-    {0x3C, 0x66, 0x60, 0x7C, 0x66, 0x66, 0x3C, 0x00}, // 6
-    {0x7E, 0x66, 0x0C, 0x18, 0x18, 0x18, 0x18, 0x00}, // 7
-    {0x3C, 0x66, 0x66, 0x3C, 0x66, 0x66, 0x3C, 0x00}, // 8
-    {0x3C, 0x66, 0x66, 0x3E, 0x06, 0x66, 0x3C, 0x00}, // 9
-};
-
-// Hiển thị số to 16x16 chuẩn xác trên toàn bộ ma trận
-static void draw_digit_16x16(char digit) {
-    fb_clear();
-    if (digit < '0' || digit > '9') return;
-    const uint8_t *glyph = FONT_8X8[digit - '0'];
-
-    for (int r = 0; r < 8; r++) {
-        uint8_t row_val = glyph[r];
-        for (int c = 0; c < 8; c++) {
-            if (row_val & (1 << (7 - c))) {
-                int x0 = c * 2;
-                int y0 = r * 2;
-                set_pixel_grid_16x16(x0,     y0,     true);
-                set_pixel_grid_16x16(x0 + 1, y0,     true);
-                set_pixel_grid_16x16(x0,     y0 + 1, true);
-                set_pixel_grid_16x16(x0 + 1, y0 + 1, true);
-            }
-        }
-    }
-    fb_render();
-}
-
-// ============================================================================
-// TASK ĐIỀU KHIỂN CHÍNH
-// ============================================================================
-static void led_diag_task(void *pvParameters) {
-    ESP_LOGI(TAG, "=== KHOI DONG HE THONG TEST 4x HT16D35A (MA TRAN 16x16) ===");
+static void led_scan_task(void *pvParameters) {
+    ESP_LOGI(TAG, "=== KHOI DONG SCAN HE THONG 4x HT16D35A ===");
 
     for (int i = 0; i < NUM_ICS; i++) {
         init_ht16d35a(i);
@@ -398,37 +244,23 @@ static void led_diag_task(void *pvParameters) {
     }
 
     while (1) {
-        // BÀI TEST 1: SÁNG TỪNG BÓNG TỪ D400 -> D463, TIẾP ĐẾN D500 -> D563, D600 -> D663, D700 -> D763
-        test_step_by_step_leds();
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // BƯỚC 1: BẬT SÁNG TOÀN BỘ 28 ROW TRÊN CẢ 4 IC (3 GIÂY)
+        test_turn_all_28_rows_on();
 
-        // BÀI TEST 2: QUÉT TỪNG CỘT TỪ TRÁI SANG PHẢI (CỘT 0 -> 15)
-        test_column_sweep();
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // BƯỚC 2: QUÉT TỪNG ROW ADDRESS TỪ 0 ĐẾN 27 TRÊN IC 1 (D400..D463)
+        test_scan_all_28_rows_ic1();
 
-        // BÀI TEST 3: SÁNG TOÀN BỘ 64 BÓNG CỦA TỪNG IC
-        test_block_each_ic();
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // BƯỚC 3: QUÉT TỪNG ROW ADDRESS TỪ 0 ĐẾN 27 TRÊN CẢ 4 IC
+        test_scan_all_28_rows_all_ics();
 
-        // BÀI TEST 4: SÁNG TOÀN BỘ 256 BÓNG CỦA CẢ 4 IC
-        test_all_matrix_on();
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-        // BÀI TEST 5: HIỂN THỊ CÁC SỐ TO TỪ 1 ĐẾN 9 CHIẾM TRỌN 16x16
-        ESP_LOGI(TAG, "=== TEST HIEN THI SO TO 16x16 (1 DEN 9) ===");
-        for (char d = '1'; d <= '9'; d++) {
-            ESP_LOGI(TAG, "-> Hien thi so to 16x16: %c", d);
-            draw_digit_16x16(d);
-            vTaskDelay(pdMS_TO_TICKS(1200));
-        }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 
 extern "C" void app_main(void) {
     ESP_LOGI(TAG, "==================================================");
-    ESP_LOGI(TAG, "ESP32-C3 TEST MA TRAN 16x16 THEO DUNG SILKSCREEN");
+    ESP_LOGI(TAG, "ESP32-C3 HT16D35A FULL 28-ROW HARDWARE SCANNER");
     ESP_LOGI(TAG, "==================================================");
     init_gpio();
-    xTaskCreate(led_diag_task, "led_diag_task", 4096, NULL, 5, NULL);
+    xTaskCreate(led_scan_task, "led_scan_task", 4096, NULL, 5, NULL);
 }
