@@ -59,14 +59,15 @@ ESP32-C3 sử dụng các chân GPIO an toàn, không vướng cổng nạp USB 
 
 ## 4. BẢNG MÃ LỆNH CHUẨN CỦA HT16D35A (Datasheet)
 
-* `0x01`: **Software Reset** - Khởi động lại thanh ghi IC.
-* `0x34` + `0x01`: **Master Mode** - IC phát xung đồng bộ SYNC.
-* `0x34` + `0x03`: **Slave Mode** - IC nhận xung đồng bộ SYNC từ Master.
-* `0x31` + `0x07`: **COM Number** - Bật đầy đủ 8 cổng COM (COM0 - COM7).
-* `0x30` + `0x00`: **Binary Mode** - Chế độ hiển thị bật/tắt ma trận cơ bản.
-* `0x38` + `0x40`: **Global Brightness** - Đặt độ sáng PWM tối đa (64/64).
+* `0x00`: **Software Reset** - Khởi động lại thanh ghi IC (1 byte).
+* `0x34` + `0x01`: **Cascade Mode** - Chế độ dao động nội IRC Master (tự phát xung, không lo đứt dây SYNC).
 * `0x35` + `0x03`: **System Control** - Bật bộ dao động (`OSC ON`) và bật hiển thị (`Display ON`).
-* `0x80` + `Address` + `Data...`: **Write DDRAM** - Ghi dữ liệu ma trận LED vào RAM hiển thị.
+* `0x32` + `0x07`: **COM Number** - Bật đầy đủ 8 cổng COM (COM0 - COM7).
+* `0x36` + `0x07`: **Constant Current Ratio** - Đặt dòng quét cực đại cho các chân ROW (8/8).
+* `0x37` + `0x3F`: **Global Brightness** - Đặt độ sáng PWM tối đa (63/63).
+* `0x31` + `0x01`: **Binary Mode** - Chế độ hiển thị bật/tắt ma trận 1 bit/dot.
+* `0x38` + `0x00`: **Function Enable** - Tắt các hiệu ứng Fade/Blink/Mask để hiển thị trực tiếp.
+* `0x80` + `Address (0x00)` + `Data...`: **Write DDRAM** - Ghi dữ liệu ma trận LED vào RAM hiển thị.
 
 ---
 

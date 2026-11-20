@@ -25,70 +25,75 @@
 
 const int CS_PINS[4] = {20, 21, 9, 10};
 
-// Bảng lệnh Holtek HT16D35A
-#define CMD_SOFT_RESET       0x01
+// Bảng lệnh Holtek HT16D35A chuẩn Datasheet
+#define CMD_SOFT_RESET       0x00
+#define CMD_BINARY_GRAY      0x31
+#define CMD_COM_NUM          0x32
 #define CMD_CASCADE_MODE     0x34
 #define CMD_SYS_CONTROL      0x35
-#define CMD_COM_NUM          0x31
-#define CMD_BRIGHTNESS       0x38
-#define CMD_BINARY_GRAY      0x30
+#define CMD_CURRENT_RATIO    0x36
+#define CMD_BRIGHTNESS       0x37
+#define CMD_FUNCTION_ENABLE  0x38
 #define CMD_WRITE_DDRAM      0x80
 
 void writeByte(uint8_t data) {
   for (int i = 7; i >= 0; i--) {
     digitalWrite(PIN_CLK, LOW);
     digitalWrite(PIN_DIO, (data & (1 << i)) ? HIGH : LOW);
-    delayMicroseconds(2);
+    delayMicroseconds(4);
     digitalWrite(PIN_CLK, HIGH);
-    delayMicroseconds(2);
+    delayMicroseconds(4);
   }
+  digitalWrite(PIN_CLK, LOW);
+  delayMicroseconds(2);
 }
 
 void sendCommand(uint8_t icIndex, uint8_t cmd, uint8_t param) {
   digitalWrite(CS_PINS[icIndex], LOW);
-  delayMicroseconds(2);
+  delayMicroseconds(5);
   writeByte(cmd);
   writeByte(param);
+  delayMicroseconds(5);
   digitalWrite(CS_PINS[icIndex], HIGH);
-  delayMicroseconds(2);
+  delayMicroseconds(5);
 }
 
-void initHT16D35A(uint8_t icIndex, bool isMaster) {
+void initHT16D35A(uint8_t icIndex) {
   digitalWrite(CS_PINS[icIndex], LOW);
+  delayMicroseconds(5);
   writeByte(CMD_SOFT_RESET);
+  delayMicroseconds(5);
   digitalWrite(CS_PINS[icIndex], HIGH);
-  delay(15);
+  delay(20);
 
-  if (isMaster) {
-    sendCommand(icIndex, CMD_CASCADE_MODE, 0x01); // Master Mode
-  } else {
-    sendCommand(icIndex, CMD_CASCADE_MODE, 0x03); // Slave Mode
-  }
-
-  sendCommand(icIndex, CMD_COM_NUM, 0x07);     // Kích hoạt COM0..COM7
-  sendCommand(icIndex, CMD_BINARY_GRAY, 0x00); // Binary Mode
-  sendCommand(icIndex, CMD_BRIGHTNESS, 0x40);  // Độ sáng tối đa
-  sendCommand(icIndex, CMD_SYS_CONTROL, 0x03); // Bật OSC & Display
+  sendCommand(icIndex, CMD_CASCADE_MODE, 0x01);    // IRC Master Mode
+  sendCommand(icIndex, CMD_SYS_CONTROL, 0x03);     // Bật OSC & Display
+  sendCommand(icIndex, CMD_COM_NUM, 0x07);         // Kích hoạt COM0..COM7
+  sendCommand(icIndex, CMD_CURRENT_RATIO, 0x07);   // Cực đại dòng LED
+  sendCommand(icIndex, CMD_BRIGHTNESS, 0x3F);      // Độ sáng tối đa
+  sendCommand(icIndex, CMD_BINARY_GRAY, 0x01);     // Binary Mode
+  sendCommand(icIndex, CMD_FUNCTION_ENABLE, 0x00); // Tắt Masking
 }
 
 void fillDisplay(uint8_t icIndex, uint8_t pattern) {
   digitalWrite(CS_PINS[icIndex], LOW);
-  delayMicroseconds(2);
+  delayMicroseconds(5);
   writeByte(CMD_WRITE_DDRAM);
   writeByte(0x00);
   for (int i = 0; i < 224; i++) {
     writeByte(pattern);
   }
+  delayMicroseconds(5);
   digitalWrite(CS_PINS[icIndex], HIGH);
-  delayMicroseconds(2);
+  delayMicroseconds(5);
 }
 
 void setup() {
   Serial.begin(115200);
   pinMode(PIN_CLK, OUTPUT);
   pinMode(PIN_DIO, OUTPUT);
-  digitalWrite(PIN_CLK, HIGH);
-  digitalWrite(PIN_DIO, HIGH);
+  digitalWrite(PIN_CLK, LOW);
+  digitalWrite(PIN_DIO, LOW);
 
   for (int i = 0; i < 4; i++) {
     pinMode(CS_PINS[i], OUTPUT);
@@ -96,8 +101,9 @@ void setup() {
   }
 
   Serial.println("\n--- Khoi tao HT16D35A (4 ICs) ---");
-  initHT16D35A(0, true);  // IC 1 Master
-  for (int i = 1; i < 4; i++) {
+  for (int i = 0; i < 4; i++) {
+    initHT16D35A(i);
+  }
     initHT16D35A(i, false); // IC 2..4 Slave
   }
   Serial.println("Khoi tao thanh cong!");
