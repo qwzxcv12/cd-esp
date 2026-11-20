@@ -1,94 +1,138 @@
 /**
- * ULTRA SLOW: Chi 4 buoc, moi buoc 15 giay, lap lai mai mai
- * Muc tieu: Xac dinh thu tu R/G/B cua IC HT16D35A
- *
- * BUOC 1: IC1 addr=0 bit=0 → 1 sub-pixel (R?) sang 15s
- * BUOC 2: IC1 addr=1 bit=0 → 1 sub-pixel (G?) sang 15s
- * BUOC 3: IC1 addr=2 bit=0 → 1 sub-pixel (B?) sang 15s
- * BUOC 4: IC1 addr=0+1+2 bit=0 → 1 bong TRANG? hay 3 bong? 15s
+ * ============================================================================
+ * TEST TUNG BONG LED MA TRAN 16x16 FULL RGB (4x HT16D35A)
+ * CHE DO NHAY CHAM: MOI BONG SANG 2 GIAY ROI CHUYEN SANG BONG TIEP THEO
+ * ============================================================================
  */
+
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 
-static const char *TAG = "SLOW";
+static const char *TAG = "LED_TEST";
 
-#define PIN_CLK  GPIO_NUM_1
-#define PIN_DIO  GPIO_NUM_0
-#define PIN_CS1  GPIO_NUM_20
-#define PIN_CS2  GPIO_NUM_21
-#define PIN_CS3  GPIO_NUM_9
-#define PIN_CS4  GPIO_NUM_10
-#define NUM_ICS  4
+// --- CHÂN GPIO ESP32-C3 ---
+#define PIN_CLK         GPIO_NUM_1
+#define PIN_DIO         GPIO_NUM_0
+
+#define PIN_CS1         GPIO_NUM_20  // IC 1: D400..D463
+#define PIN_CS2         GPIO_NUM_21  // IC 2: D500..D563
+#define PIN_CS3         GPIO_NUM_9   // IC 3: D600..D663
+#define PIN_CS4         GPIO_NUM_10  // IC 4: D700..D763
+
+#define NUM_ICS         4
 static const gpio_num_t CS_PINS[NUM_ICS] = {PIN_CS1, PIN_CS2, PIN_CS3, PIN_CS4};
 
-#define CMD_SOFT_RESET        0xCC
-#define CMD_SOFT_RESET_ALT    0x00
-#define CMD_BINARY_MODE       0x31
-#define CMD_COM_NUMBER        0x32
-#define CMD_CASCADE_MODE      0x34
-#define CMD_SYSTEM_CTRL       0x35
-#define CMD_CURRENT_RATIO     0x36
-#define CMD_GLOBAL_BRIGHTNESS 0x37
-#define CMD_FUNCTION_ENABLE   0x38
-#define CMD_SCROLL_CTRL       0x20
-#define CMD_COM_PIN_CTRL      0x41
-#define CMD_ROW_PIN_CTRL      0x42
-#define CMD_WRITE_DDRAM       0x80
-#define NUM_ROWS 28
+// --- MÃ LỆNH HOLTEK HT16D35A ---
+#define CMD_SOFT_RESET          0xCC
+#define CMD_SOFT_RESET_ALT      0x00
+#define CMD_BINARY_MODE         0x31
+#define CMD_COM_NUMBER          0x32
+#define CMD_CASCADE_MODE        0x34
+#define CMD_SYSTEM_CTRL         0x35
+#define CMD_CURRENT_RATIO       0x36
+#define CMD_GLOBAL_BRIGHTNESS   0x37
+#define CMD_FUNCTION_ENABLE     0x38
+#define CMD_SCROLL_CTRL         0x20
+#define CMD_COM_PIN_CTRL        0x41
+#define CMD_ROW_PIN_CTRL        0x42
+#define CMD_WRITE_DDRAM         0x80
 
-static uint8_t fb[NUM_ICS][NUM_ROWS];
+#define NUM_ROWS_PER_IC  28
 
-static inline void dly(uint32_t us) { esp_rom_delay_us(us); }
-static void wb(uint8_t d) {
+static uint8_t fb[NUM_ICS][NUM_ROWS_PER_IC];
+
+static inline void delay_us(uint32_t us) {
+    esp_rom_delay_us(us);
+}
+
+static void write_byte(uint8_t data) {
     for (int i = 7; i >= 0; i--) {
         gpio_set_level(PIN_CLK, 0);
-        gpio_set_level(PIN_DIO, (d >> i) & 1);
-        dly(2); gpio_set_level(PIN_CLK, 1); dly(2);
+        gpio_set_level(PIN_DIO, (data & (1 << i)) ? 1 : 0);
+        delay_us(2);
+        gpio_set_level(PIN_CLK, 1);
+        delay_us(2);
     }
-    gpio_set_level(PIN_CLK, 0); dly(1);
+    gpio_set_level(PIN_CLK, 0);
+    delay_us(1);
 }
-static void cmd1(int ic, uint8_t c) { gpio_set_level(CS_PINS[ic],0); dly(4); wb(c); dly(4); gpio_set_level(CS_PINS[ic],1); dly(4); }
-static void cmd2(int ic, uint8_t c, uint8_t p) { gpio_set_level(CS_PINS[ic],0); dly(4); wb(c); wb(p); dly(4); gpio_set_level(CS_PINS[ic],1); dly(4); }
-static void cmd5(int ic, uint8_t c, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) { gpio_set_level(CS_PINS[ic],0); dly(4); wb(c); wb(p1); wb(p2); wb(p3); wb(p4); dly(4); gpio_set_level(CS_PINS[ic],1); dly(4); }
 
-static void fb_clear(void) { memset(fb, 0, sizeof(fb)); }
+static void send_cmd_1b(uint8_t ic_idx, uint8_t cmd) {
+    if (ic_idx >= NUM_ICS) return;
+    gpio_set_level(CS_PINS[ic_idx], 0); delay_us(4);
+    write_byte(cmd);
+    delay_us(4); gpio_set_level(CS_PINS[ic_idx], 1); delay_us(4);
+}
+
+static void send_cmd_2b(uint8_t ic_idx, uint8_t cmd, uint8_t p1) {
+    if (ic_idx >= NUM_ICS) return;
+    gpio_set_level(CS_PINS[ic_idx], 0); delay_us(4);
+    write_byte(cmd); write_byte(p1);
+    delay_us(4); gpio_set_level(CS_PINS[ic_idx], 1); delay_us(4);
+}
+
+static void send_cmd_5b(uint8_t ic_idx, uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
+    if (ic_idx >= NUM_ICS) return;
+    gpio_set_level(CS_PINS[ic_idx], 0); delay_us(4);
+    write_byte(cmd); write_byte(p1); write_byte(p2); write_byte(p3); write_byte(p4);
+    delay_us(4); gpio_set_level(CS_PINS[ic_idx], 1); delay_us(4);
+}
+
+static void fb_clear(void) {
+    memset(fb, 0, sizeof(fb));
+}
+
 static void fb_render(void) {
-    for (int ic = 0; ic < NUM_ICS; ic++) {
-        gpio_set_level(CS_PINS[ic],0); dly(4);
-        wb(CMD_WRITE_DDRAM); wb(0x00);
-        for (int r = 0; r < NUM_ROWS; r++) wb(fb[ic][r]);
-        dly(4); gpio_set_level(CS_PINS[ic],1); dly(4);
+    for (uint8_t ic = 0; ic < NUM_ICS; ic++) {
+        gpio_set_level(CS_PINS[ic], 0); delay_us(4);
+        write_byte(CMD_WRITE_DDRAM); write_byte(0x00);
+        for (int r = 0; r < NUM_ROWS_PER_IC; r++) {
+            write_byte(fb[ic][r]);
+        }
+        delay_us(4); gpio_set_level(CS_PINS[ic], 1); delay_us(4);
     }
 }
-static void init_ic(int ic) {
-    cmd1(ic, CMD_SOFT_RESET); dly(100);
-    cmd1(ic, CMD_SOFT_RESET_ALT); vTaskDelay(pdMS_TO_TICKS(10));
-    cmd2(ic, CMD_BINARY_MODE, 0x01);
-    cmd2(ic, CMD_COM_NUMBER, 0x07);
-    cmd2(ic, CMD_CASCADE_MODE, 0x01);
-    cmd2(ic, CMD_SYSTEM_CTRL, 0x00);
-    cmd2(ic, CMD_CURRENT_RATIO, 0x07);
-    cmd2(ic, CMD_GLOBAL_BRIGHTNESS, 0x3F);
-    cmd2(ic, CMD_FUNCTION_ENABLE, 0x00);
-    cmd2(ic, CMD_SCROLL_CTRL, 0x00);
-    cmd2(ic, CMD_COM_PIN_CTRL, 0xFF);
-    cmd5(ic, CMD_ROW_PIN_CTRL, 0xFF, 0xFF, 0xFF, 0xFF);
-    gpio_set_level(CS_PINS[ic],0); dly(4);
-    wb(CMD_WRITE_DDRAM); wb(0x00);
-    for (int r = 0; r < NUM_ROWS; r++) wb(0x00);
-    dly(4); gpio_set_level(CS_PINS[ic],1); dly(4);
-    cmd2(ic, CMD_SYSTEM_CTRL, 0x03);
+
+static void init_ht16d35a(uint8_t ic_idx) {
+    send_cmd_1b(ic_idx, CMD_SOFT_RESET);
+    delay_us(100);
+    send_cmd_1b(ic_idx, CMD_SOFT_RESET_ALT);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    send_cmd_2b(ic_idx, CMD_BINARY_MODE, 0x01);
+    send_cmd_2b(ic_idx, CMD_COM_NUMBER, 0x07);
+    send_cmd_2b(ic_idx, CMD_CASCADE_MODE, 0x01);
+    send_cmd_2b(ic_idx, CMD_SYSTEM_CTRL, 0x00);
+    send_cmd_2b(ic_idx, CMD_CURRENT_RATIO, 0x07);
+    send_cmd_2b(ic_idx, CMD_GLOBAL_BRIGHTNESS, 0x3F);
+    send_cmd_2b(ic_idx, CMD_FUNCTION_ENABLE, 0x00);
+    send_cmd_2b(ic_idx, CMD_SCROLL_CTRL, 0x00);
+    send_cmd_2b(ic_idx, CMD_COM_PIN_CTRL, 0xFF);
+    send_cmd_5b(ic_idx, CMD_ROW_PIN_CTRL, 0xFF, 0xFF, 0xFF, 0xFF);
+
+    gpio_set_level(CS_PINS[ic_idx], 0); delay_us(4);
+    write_byte(CMD_WRITE_DDRAM); write_byte(0x00);
+    for (int r = 0; r < NUM_ROWS_PER_IC; r++) write_byte(0x00);
+    delay_us(4); gpio_set_level(CS_PINS[ic_idx], 1); delay_us(4);
+
+    send_cmd_2b(ic_idx, CMD_SYSTEM_CTRL, 0x03);
+    ESP_LOGI(TAG, "IC %d (CS GPIO %d) khoi tao OK", ic_idx + 1, CS_PINS[ic_idx]);
 }
+
 static void init_gpio(void) {
-    gpio_reset_pin(PIN_CLK); gpio_reset_pin(PIN_DIO);
+    gpio_reset_pin(PIN_CLK);
+    gpio_reset_pin(PIN_DIO);
     gpio_set_direction(PIN_CLK, GPIO_MODE_OUTPUT);
     gpio_set_direction(PIN_DIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(PIN_CLK, 0); gpio_set_level(PIN_DIO, 0);
+    gpio_set_level(PIN_CLK, 0);
+    gpio_set_level(PIN_DIO, 0);
+
     for (int i = 0; i < NUM_ICS; i++) {
         gpio_reset_pin(CS_PINS[i]);
         gpio_set_direction(CS_PINS[i], GPIO_MODE_OUTPUT);
@@ -96,55 +140,74 @@ static void init_gpio(void) {
     }
 }
 
-#define HOLD_MS  15000  // 15 GIAY moi buoc
+// Bật 1 bóng RGB theo col (0..3) và row (0..15)
+static void set_led_rgb(uint8_t ic, uint8_t col, uint8_t row, bool r, bool g, bool b) {
+    if (ic >= NUM_ICS || col >= 4 || row >= 16) return;
 
-static void led_task(void *pv) {
-    for (int i = 0; i < NUM_ICS; i++) init_ic(i);
-    ESP_LOGI(TAG, "READY - moi buoc giu %d giay", HOLD_MS/1000);
+    uint8_t t = row % 8;
+    uint8_t addr_R = t * 3 + 0;
+    uint8_t addr_G = t * 3 + 1;
+    uint8_t addr_B = t * 3 + 2;
 
-    int round = 0;
+    uint8_t com_bit = (row < 8) ? col : (col + 4);
+    uint8_t mask = (1 << com_bit);
+
+    if (r) fb[ic][addr_R] |= mask; else fb[ic][addr_R] &= ~mask;
+    if (g) fb[ic][addr_G] |= mask; else fb[ic][addr_G] &= ~mask;
+    if (b) fb[ic][addr_B] |= mask; else fb[ic][addr_B] &= ~mask;
+}
+
+// Bật duy nhất 1 bóng thứ k (0..63)
+static void light_single_led(uint8_t ic, uint8_t k) {
+    fb_clear();
+    uint8_t col = k / 16;  // Cột 0..3
+    uint8_t row = k % 16;  // Hàng 0..15
+    set_led_rgb(ic, col, row, true, true, true);
+    fb_render();
+}
+
+static void led_task(void *pvParameters) {
+    ESP_LOGI(TAG, "=== KHOI DONG TEST NHAY CHAM (2 GIAY / BONG) ===");
+
+    for (int i = 0; i < NUM_ICS; i++) {
+        init_ht16d35a(i);
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
     while (1) {
-        round++;
-        ESP_LOGI(TAG, "=== VONG %d ===", round);
+        for (int ic = 0; ic < NUM_ICS; ic++) {
+            int base_name = 400 + ic * 100;
+            ESP_LOGW(TAG, "==========================================================");
+            ESP_LOGW(TAG, ">>> BAT DAU IC %d (CS GPIO %d): D%03d DEN D%03d <<<", ic + 1, CS_PINS[ic], base_name, base_name + 63);
+            ESP_LOGW(TAG, "==========================================================");
 
-        // ---- BUOC 1: addr=0 bit=0 ----
-        fb_clear();
-        fb[0][0] = 0x01;
-        fb_render();
-        ESP_LOGI(TAG, "BUOC 1/4: addr=0, bit=0 | MAU GI? BONG D4??");
-        vTaskDelay(pdMS_TO_TICKS(HOLD_MS));
+            for (int k = 0; k < 64; k++) {
+                int led_num = base_name + k;
+                int chip_col = k / 16;
+                int chip_row = k % 16;
 
-        // ---- BUOC 2: addr=1 bit=0 ----
-        fb_clear();
-        fb[0][1] = 0x01;
-        fb_render();
-        ESP_LOGI(TAG, "BUOC 2/4: addr=1, bit=0 | MAU GI? BONG D4??");
-        vTaskDelay(pdMS_TO_TICKS(HOLD_MS));
+                // Bật bóng duy nhất
+                light_single_led(ic, k);
 
-        // ---- BUOC 3: addr=2 bit=0 ----
-        fb_clear();
-        fb[0][2] = 0x01;
-        fb_render();
-        ESP_LOGI(TAG, "BUOC 3/4: addr=2, bit=0 | MAU GI? BONG D4??");
-        vTaskDelay(pdMS_TO_TICKS(HOLD_MS));
+                ESP_LOGI(TAG, ">>> DANG SANG: D%03d | IC%d Cot:%d Hang:%02d (Bong %02d/63) - CHO 2 GIAY...", 
+                         led_num, ic + 1, chip_col, chip_row, k);
 
-        // ---- BUOC 4: addr=0+1+2 bit=0 ----
-        fb_clear();
-        fb[0][0] = 0x01;
-        fb[0][1] = 0x01;
-        fb[0][2] = 0x01;
-        fb_render();
-        ESP_LOGI(TAG, "BUOC 4/4: addr=0+1+2, bit=0 | 1 BONG TRANG hay 3 BONG KHAC NHAU?");
-        vTaskDelay(pdMS_TO_TICKS(HOLD_MS));
+                // GIỮ ĐÚNG 2 GIÂY (2000ms) để quan sát
+                vTaskDelay(pdMS_TO_TICKS(2000));
+            }
 
-        // ---- TAT het 3 giay ----
-        fb_clear(); fb_render();
-        ESP_LOGI(TAG, "--- TAT 3s roi lap lai ---");
-        vTaskDelay(pdMS_TO_TICKS(3000));
+            // Nghỉ 1 giây sau khi xong 1 IC
+            fb_clear();
+            fb_render();
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
     }
 }
 
 extern "C" void app_main(void) {
+    ESP_LOGI(TAG, "ESP32-C3 SLOW LED SCANNER (2 SECONDS PER LED)");
     init_gpio();
     xTaskCreate(led_task, "led_task", 4096, NULL, 5, NULL);
 }
