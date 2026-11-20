@@ -5,23 +5,24 @@
  * Framework: ESP-IDF v5.1+ (Build & Flash tự động qua cloud_builder.py)
  * ============================================================================
  * 
- * KIẾN TRÚC PHẦN CỨNG CHÍNH XÁC 100%:
- * - Ma trận vật lý: 16 cột x 16 hàng (256 bóng LED RGB).
- * - 4 IC HT16D35A: Mỗi IC điều khiển 4 cột x 16 hàng = 64 bóng LED RGB.
- * - 16 hàng trên mạch được chia thành 8 Cặp Hàng (Pair 0..7) từ Đáy (0) lên Đỉnh (7).
- * - Mỗi Cặp Hàng có 3 địa chỉ DDRAM:
- *     + addr_G = Pair * 3 + 0 (Xanh lá)
- *     + addr_B = Pair * 3 + 1 (Xanh dương)
- *     + addr_R = Pair * 3 + 2 (Đỏ)
- * - 8 bit COM (COM0..COM7) trong mỗi địa chỉ điều khiển:
- *     + 4 bit cho 4 cột của hàng chẵn (Hàng 0, 2, 4, 6...)
- *     + 4 bit cho 4 cột của hàng lẻ   (Hàng 1, 3, 5, 7...)
+ * SƠ ĐỒ ĐẤU NỐI PHẦN CỨNG:
+ * - Chân CLK : GPIO 1  (Chân 10 HT16D35A, nối chung 4 IC)
+ * - Chân DIO : GPIO 0  (Chân 9 HT16D35A, nối chung 4 IC)
+ * - Chân CS1 : GPIO 20 (IC 1: D400..D463)
+ * - Chân CS2 : GPIO 21 (IC 2: D500..D563)
+ * - Chân CS3 : GPIO 9  (IC 3: D600..D663)
+ * - Chân CS4 : GPIO 10 (IC 4: D700..D763)
  * 
- * PHÂN BỔ 4 IC:
- * - IC 1 (CS1 - GPIO 20): Cột 0..3   (LED D400 đến D463)
- * - IC 2 (CS2 - GPIO 21): Cột 4..7   (LED D500 đến D563)
- * - IC 3 (CS3 - GPIO 9):  Cột 8..11  (LED D600 đến D663)
- * - IC 4 (CS4 - GPIO 10): Cột 12..15 (LED D700 đến D763)
+ * ÁNH XẠ ĐỊA CHỈ PHẦN CỨNG CHÍNH XÁC 100%:
+ * - Ma trận vật lý: 16 cột x 16 hàng (256 bóng LED Full RGB).
+ * - 4 IC HT16D35A: Mỗi IC quản lý 4 cột x 16 hàng = 64 bóng LED RGB.
+ * - 16 hàng trên mạch chia thành 8 nhóm triplet t = row % 8 (t = 0..7).
+ *   + addr_R = t * 3 + 0 (Màu Đỏ)
+ *   + addr_G = t * 3 + 1 (Màu Xanh Lá)
+ *   + addr_B = t * 3 + 2 (Màu Xanh Dương)
+ * - 8 bit COM của mỗi IC:
+ *   + COM0..COM3 (bit 0..3): 4 cột của nửa dưới (Hàng 0..7) -> com_bit = col
+ *   + COM4..COM7 (bit 4..7): 4 cột của nửa trên (Hàng 8..15) -> com_bit = col + 4
  * ============================================================================
  */
 
@@ -49,10 +50,6 @@ static const char *TAG = "RGB_MATRIX_16X16";
 #define NUM_ICS         4
 static const gpio_num_t CS_PINS[NUM_ICS] = {PIN_CS1, PIN_CS2, PIN_CS3, PIN_CS4};
 
-// Cờ cấu hình bitmapping
-#define SUB_SWAP        0  // Đổi 1 nếu hàng chẵn/lẻ bị ngược
-#define COL_INVERT      0  // Đổi 1 nếu cột bị ngược trái/phải trong IC
-
 // --- MÃ LỆNH HOLTEK HT16D35A ---
 #define CMD_SOFT_RESET          0xCC
 #define CMD_SOFT_RESET_ALT      0x00
@@ -70,7 +67,7 @@ static const gpio_num_t CS_PINS[NUM_ICS] = {PIN_CS1, PIN_CS2, PIN_CS3, PIN_CS4};
 
 #define NUM_ROWS_PER_IC  28
 
-// Framebuffer toàn cục: 28 bytes cho mỗi IC
+// Framebuffer toàn cục: 28 bytes cho mỗi IC (24 bytes tích cực: 0..23)
 static uint8_t fb[NUM_ICS][NUM_ROWS_PER_IC];
 
 static inline void delay_us(uint32_t us) {
@@ -161,6 +158,7 @@ static void init_ht16d35a(uint8_t ic_idx) {
     send_cmd_2b(ic_idx, CMD_COM_PIN_CTRL, 0xFF);
     send_cmd_5b(ic_idx, CMD_ROW_PIN_CTRL, 0xFF, 0xFF, 0xFF, 0xFF);
 
+    // Xóa DDRAM ban đầu
     gpio_set_level(CS_PINS[ic_idx], 0);
     delay_us(4);
     write_byte(CMD_WRITE_DDRAM);
@@ -202,42 +200,37 @@ static void init_gpio(void) {
 static void set_led_rgb(uint8_t ic, uint8_t col, uint8_t row, bool r, bool g, bool b) {
     if (ic >= NUM_ICS || col >= 4 || row >= 16) return;
 
-    uint8_t pair = row / 2;      // 0..7
-    uint8_t sub  = row % 2;      // 0 hoặc 1
+    // 8 nhóm triplet: t = row % 8
+    uint8_t t = row % 8;
 
-    uint8_t addr_G = pair * 3 + 0;
-    uint8_t addr_B = pair * 3 + 1;
-    uint8_t addr_R = pair * 3 + 2;
+    uint8_t addr_R = t * 3 + 0;
+    uint8_t addr_G = t * 3 + 1;
+    uint8_t addr_B = t * 3 + 2;
 
-#if COL_INVERT
-    uint8_t eff_col = 3 - col;
-#else
-    uint8_t eff_col = col;
-#endif
-
-#if SUB_SWAP
-    uint8_t com_bit = (sub == 1) ? eff_col : (eff_col + 4);
-#else
-    uint8_t com_bit = (sub == 0) ? eff_col : (eff_col + 4);
-#endif
-
+    // Hàng 0..7 (nửa dưới): COM0..3 (bit 0..3)
+    // Hàng 8..15 (nửa trên): COM4..7 (bit 4..7)
+    uint8_t com_bit = (row < 8) ? col : (col + 4);
     uint8_t mask = (1 << com_bit);
 
+    if (r) fb[ic][addr_R] |= mask; else fb[ic][addr_R] &= ~mask;
     if (g) fb[ic][addr_G] |= mask; else fb[ic][addr_G] &= ~mask;
     if (b) fb[ic][addr_B] |= mask; else fb[ic][addr_B] &= ~mask;
-    if (r) fb[ic][addr_R] |= mask; else fb[ic][addr_R] &= ~mask;
 }
 
 /**
  * Bật duy nhất 1 bóng LED theo số thứ tự k (0..63) trong IC
- * Sáng TRẮNG (R+G+B) để nhìn rõ nhất
+ * Silkscreen tăng dần từ đáy lên đỉnh theo từng cột:
+ * Cột 0: k=0..15  (D400 đáy đến D415 đỉnh)
+ * Cột 1: k=16..31 (D416 đáy đến D431 đỉnh)
+ * Cột 2: k=32..47 (D432 đáy đến D447 đỉnh)
+ * Cột 3: k=48..63 (D448 đáy đến D463 đỉnh)
  */
 static void light_single_led_index(uint8_t ic, uint8_t k) {
     fb_clear();
     uint8_t col = k / 16;  // Cột 0..3
     uint8_t row = k % 16;  // Hàng 0..15 (0 đáy, 15 đỉnh)
 
-    // Bật cả 3 màu = SÁNG TRẮNG CỰC KỲ RÕ
+    // Bật cả 3 màu = SÁNG TRẮNG ĐẦY ĐỦ CỰC SẮC NÉT
     set_led_rgb(ic, col, row, true, true, true);
     fb_render();
 }
@@ -251,7 +244,7 @@ static void light_single_led_index(uint8_t ic, uint8_t k) {
 // ============================================================================
 static void test_step_by_step_leds(void) {
     ESP_LOGI(TAG, "==========================================================");
-    ESP_LOGI(TAG, "BAT DAU TEST TUNG BONG LED FULL RGB THEO SILKSCREEN:");
+    ESP_LOGI(TAG, "BAT DAU TEST TUNG BONG LED FULL RGB THEO DUNG SILKSCREEN:");
     ESP_LOGI(TAG, "IC 1: D400 -> D463 | IC 2: D500 -> D563");
     ESP_LOGI(TAG, "IC 3: D600 -> D663 | IC 4: D700 -> D763");
     ESP_LOGI(TAG, "==========================================================");
@@ -269,10 +262,10 @@ static void test_step_by_step_leds(void) {
             int screen_col = ic * 4 + chip_col;
             int row = k % 16;
 
-            ESP_LOGI(TAG, "LED D%03d [IC%d | Col:%02d | Row:%02d]", led_num, ic + 1, screen_col, row);
-            vTaskDelay(pdMS_TO_TICKS(80)); // 80ms mỗi bóng
+            ESP_LOGI(TAG, "LED D%03d [IC%d | Col:%02d | Row:%02d] -> ON", led_num, ic + 1, screen_col, row);
+            vTaskDelay(pdMS_TO_TICKS(80)); // 80ms mỗi bóng, chạy mượt mà rõ ràng
         }
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(500)); // Nghỉ 0.5s giữa các IC
     }
 }
 
@@ -289,7 +282,7 @@ static void test_row_sweep(void) {
             set_led_rgb(ic, col, r, true, true, false); // Màu Vàng
         }
         fb_render();
-        vTaskDelay(pdMS_TO_TICKS(150));
+        vTaskDelay(pdMS_TO_TICKS(120));
     }
     fb_clear();
     fb_render();
@@ -309,7 +302,7 @@ static void test_column_sweep(void) {
             set_led_rgb(ic, col, r, false, true, true); // Màu Cyan
         }
         fb_render();
-        vTaskDelay(pdMS_TO_TICKS(150));
+        vTaskDelay(pdMS_TO_TICKS(120));
     }
     fb_clear();
     fb_render();
@@ -322,37 +315,37 @@ static void test_column_sweep(void) {
 static void test_all_matrix_colors(void) {
     ESP_LOGI(TAG, "=== TEST SANG TOAN BO 256 BONG RGB ===");
 
-    // 1. ĐỎ
+    // 1. ĐỎ (addr_R = p * 3 + 0)
     fb_clear();
     for (int ic = 0; ic < NUM_ICS; ic++) {
-        for (int p = 0; p < 8; p++) fb[ic][p * 3 + 2] = 0xFF; // Red
+        for (int p = 0; p < 8; p++) fb[ic][p * 3 + 0] = 0xFF;
     }
     fb_render();
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    // 2. XANH LÁ
+    // 2. XANH LÁ (addr_G = p * 3 + 1)
     fb_clear();
     for (int ic = 0; ic < NUM_ICS; ic++) {
-        for (int p = 0; p < 8; p++) fb[ic][p * 3 + 0] = 0xFF; // Green
+        for (int p = 0; p < 8; p++) fb[ic][p * 3 + 1] = 0xFF;
     }
     fb_render();
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    // 3. XANH DƯƠNG
+    // 3. XANH DƯƠNG (addr_B = p * 3 + 2)
     fb_clear();
     for (int ic = 0; ic < NUM_ICS; ic++) {
-        for (int p = 0; p < 8; p++) fb[ic][p * 3 + 1] = 0xFF; // Blue
+        for (int p = 0; p < 8; p++) fb[ic][p * 3 + 2] = 0xFF;
     }
     fb_render();
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    // 4. TRẮNG (R + G + B)
+    // 4. TRẮNG (R + G + B = tất cả 24 bytes)
     fb_clear();
     for (int ic = 0; ic < NUM_ICS; ic++) {
         for (int r = 0; r < 24; r++) fb[ic][r] = 0xFF;
     }
     fb_render();
-    vTaskDelay(pdMS_TO_TICKS(1500));
+    vTaskDelay(pdMS_TO_TICKS(1200));
 
     fb_clear();
     fb_render();
@@ -366,11 +359,11 @@ static void set_pixel_16x16(int x, int y, bool r, bool g, bool b) {
     if (x < 0 || x >= 16 || y < 0 || y >= 16) return;
     uint8_t ic = x / 4;
     uint8_t col = x % 4;
-    uint8_t row = 15 - y; // y=0 là đỉnh, y=15 là đáy
+    uint8_t row = 15 - y; // y=0 là đỉnh (Hàng 15), y=15 là đáy (Hàng 0)
     set_led_rgb(ic, col, row, r, g, b);
 }
 
-// Bảng Font 8x8 chuẩn
+// Bảng Font 8x8 chuẩn phóng to 2x2 thành 16x16
 static const uint8_t FONT_8X8[10][8] = {
     {0x3C, 0x66, 0x6E, 0x76, 0x66, 0x66, 0x3C, 0x00}, // 0
     {0x18, 0x38, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x00}, // 1
@@ -395,10 +388,11 @@ static void draw_digit_16x16(char digit) {
             if (row_val & (1 << (7 - c))) {
                 int x0 = c * 2;
                 int y0 = r * 2;
-                set_pixel_16x16(x0,     y0,     true, true, false); // Màu Vàng
-                set_pixel_16x16(x0 + 1, y0,     true, true, false);
-                set_pixel_16x16(x0,     y0 + 1, true, true, false);
-                set_pixel_16x16(x0 + 1, y0 + 1, true, true, false);
+                // Màu Xanh Lá đậm nét cho chữ số
+                set_pixel_16x16(x0,     y0,     false, true, false);
+                set_pixel_16x16(x0 + 1, y0,     false, true, false);
+                set_pixel_16x16(x0,     y0 + 1, false, true, false);
+                set_pixel_16x16(x0 + 1, y0 + 1, false, true, false);
             }
         }
     }
@@ -436,11 +430,11 @@ static void led_rgb_task(void *pvParameters) {
         // BÀI TEST 5: HIỂN THỊ CÁC CHỮ SỐ TỪ 1 ĐẾN 9 CHIẾM TRỌN 16x16
         ESP_LOGI(TAG, "=== TEST HIEN THI SO TO 16x16 (1 DEN 9) ===");
         for (char d = '1'; d <= '9'; d++) {
-            ESP_LOGI(TAG, "-> So: %c", d);
+            ESP_LOGI(TAG, "-> Hien thi So: %c", d);
             draw_digit_16x16(d);
-            vTaskDelay(pdMS_TO_TICKS(1200));
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(1500));
     }
 }
 
