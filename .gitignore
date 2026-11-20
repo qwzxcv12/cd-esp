@@ -1,19 +1,6 @@
-# Binaries & Build artifacts
 *.bin
 build/
-bootloader/
-partition_table/
-esp32_firmware_temp.zip
-
-# IDE & Editor folders
-.vscode/
-.idea/
 .pio/
-
-# Python cache
-__pycache__/
-*.pyc
-
-# Local credentials
+.vscode/
 builder_config.json
 cloud_builder.py

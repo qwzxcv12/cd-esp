@@ -1,9 +1,9 @@
 @echo off
-title BIEN DICH VA NAP CODE ESP32-C3
+title BIEN DICH VA NAP CODE ESP32-C3 LED HT16D35A
 color 0B
 
 echo =====================================================================
-echo          HE THONG TU DONG BIEN DICH VA NAP FIRMWARE ESP32-C3
+echo    HE THONG TU DONG BIEN DICH VA NAP FIRMWARE ESP32-C3 HT16D35A
 echo =====================================================================
 echo.
 
@@ -13,8 +13,8 @@ REM 1. Kiem tra Python
 python --version >nul 2>&1
 if errorlevel 1 goto :no_python
 
-REM 2. Dong bo ma nguon main.cpp sang ESP32C3_RS232.cpp
-if exist "main.cpp" copy /Y "main.cpp" "ESP32C3_RS232.cpp" >nul
+REM 2. Dong bo ma nguon main.cpp sang ESP32C3_LEDRBG.cpp
+if exist "main.cpp" copy /Y "main.cpp" "ESP32C3_LEDRBG.cpp" >nul
 
 REM 3. Chay qua trinh build va nap
 echo [*] Dang dong bo ma nguon, bien dich tren GitHub va nap vao ESP32-C3...

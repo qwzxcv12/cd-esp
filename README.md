@@ -1,69 +1,85 @@
-# Hệ Thống In Phiếu Lấy Số Thứ Tự Tự Động (QMS Kiosk) - ESP32-C3
+# DỰ ÁN ĐIỀU KHIỂN MẠCH MA TRẬN LED 4x HT16D35A VỚI ESP32-C3
 
-Hệ thống điều khiển máy in nhiệt ESC/POS (hoặc module RS232-to-TTL) trên **ESP32-C3 (ESP-IDF v5.1+)**, in phiếu lấy số thứ tự tự động theo mẫu thực tế của cơ quan hành chính công.
-
----
-
-## 1. Sơ Đồ Đấu Nối Phần Cứng
-
-| Chân ESP32-C3 | Tín hiệu | Thiết Bị Ngoại Vi | Chức Năng |
-| :--- | :---: | :--- | :--- |
-| **GPIO 3** (TXD) | `--->` | **RXD** Máy In / Module RS232 | Truyền lệnh in ESC/POS (Baud: **9600**, 8N1) |
-| **GPIO 4** (RXD) | `<---` | **TXD** Máy In / Module RS232 | Nhận tín hiệu phản hồi |
-| **GND** | `<--->` | **GND** Máy In & Nút Bấm | Nối chung Mass (Ground) |
-| **GPIO 0** | `<---` | **Nút Bấm In Phiếu** | Nút nhấn nhả nối GPIO 0 với GND (Chế độ Pullup) |
-| **GPIO 8** | - | **LED Status** | Đèn trạng thái (Xanh lá: Đang in; Xanh dương: Sẵn sàng) |
-| **USB Type-C** | `<--->` | **Máy tính (Cổng COM)** | Cấp nguồn, xem Log và gõ lệnh test in trực tiếp |
+Thư mục lưu trữ: `D:\thien\01_DuAn_Code\espc3 - led`
 
 ---
 
-## 2. File Cấu Hình Nội Dung Phiếu In: [`ticket_config.h`](ticket_config.h)
+## 1. TỔNG QUAN HỆ THỐNG
+Mạch gồm **4 chip HT16D35A (Holtek 48-LQFP)** ghép tầng (Cascade) để điều khiển ma trận LED công suất lớn:
+* **Giao tiếp:** SPI 3-dây (3-Wire Serial: `CLK`, `DIO`, `CSB`).
+* **Kiến trúc ghép 4 chip:**
+  * Đường xung nhịp **CLK (Chân 10)** và đường dữ liệu **DIO (Chân 9)** được nối song song chung cho cả 4 chip.
+  * Đường chọn chip **CSB (Chân 11)** được tách riêng độc lập cho từng chip (`CS1`, `CS2`, `CS3`, `CS4`).
+  * Đường đồng bộ **SYNC (Chân 12)** đã được bo mạch nối sẵn với nhau (IC 1 đóng vai trò **Master**, IC 2, 3, 4 đóng vai trò **Slave**).
 
-Bạn có thể chỉnh sửa các thông tin in trên phiếu tại file **`ticket_config.h`**:
+---
 
-```c
-// 1. Tùy chọn in ấn
-#define ENABLE_PRINT_LOGO           true    // In Logo hình tròn ở đầu phiếu (true: Bật, false: Tắt)
-#define ENABLE_VIETNAMESE_ACCENT    true    // In tiếng Việt có dấu (true: UTF-8, false: Tự động chuyển không dấu)
+## 2. BẢNG TRA CHÂN IC HT16D35A (48 LQFP-EP-A)
 
-// 2. Tiêu đề cơ quan / Đơn vị
-#define TICKET_HEADER_LINE1         "ỦY BAN NHÂN DÂN XÃ CHÂU THÀNH"
-#define TICKET_HEADER_LINE2         "TRUNG TÂM PHỤC VỤ HÀNH CHÍNH CÔNG"
-#define TICKET_HEADER_ADDRESS       "79 Tân Túc, xã Tân Nhựt, TP. Hồ Chí Minh"
+| Chân số | Tên chân | Chức năng | Kết nối thực tế |
+| :---: | :--- | :--- | :--- |
+| **6** | `VSS` | Mass logic | Nối GND chung |
+| **7** | `VDD` | Nguồn logic (2.7V - 5.5V) | Cấp 3.3V từ ESP32 (hoặc 5V ngoài) |
+| **9** | `DIO` | Đường dữ liệu (Data In/Out) | Nối chung cả 4 IC $\rightarrow$ Nối vào **GPIO 4** ESP32-C3 |
+| **10** | `CLK` | Xung nhịp đồng hồ (Clock) | Nối chung cả 4 IC $\rightarrow$ Nối vào **GPIO 3** ESP32-C3 |
+| **11** | `CSB` | Chip Select (Active LOW) | **Độc lập** từng IC $\rightarrow$ Nối **GPIO 5, 6, 7, 10** ESP32-C3 |
+| **12** | `SYNC`| Xung đồng bộ hiển thị | Nối thông giữa 4 IC trên bo mạch (không cần nối ESP32) |
+| **14, 21** | `LED_VDD` | Dương nguồn nuôi LED | Nối nguồn **5V công suất ngoài** |
+| **28, 47** | `LED_VSS` | Mass nguồn LED | Nối GND chung |
 
-// 3. Lĩnh vực phục vụ & Quầy
-#define TICKET_SERVICE_NAME         "LĨNH VỰC BHXH,BHYT,BHTN,BHTNLD,BNN"
-#define TICKET_COUNTER_NAME         "(QUẦY 1)"
+---
 
-// 4. Số thứ tự (STT) bắt đầu
-#define TICKET_START_NUMBER         1002    // Bắt đầu từ 1002 (tự tăng 1003, 1004...)
+## 3. SƠ ĐỒ ĐẤU NỐI CHI TIẾT VỚI ESP32-C3
 
-// 5. Lời nhắn chân trang
-#define TICKET_NOTICE_LINE1         "Quý khách vui lòng chờ đến lượt phục vụ"
-#define TICKET_NOTICE_LINE2         "theo STT trên màn hình điện tử. Xin cảm ơn"
+ESP32-C3 sử dụng các chân GPIO an toàn, không vướng cổng nạp USB CDC/JTAG:
+
+```
+    [ESP32-C3]                        [Mạch 4x HT16D35A]
+  +------------+                      +------------------+
+  |    GND     |--------------------->|  GND (Chân 6)    | <--- Nối chung Mass Nguồn 5V
+  |    3.3V    |--------------------->|  VDD (Chân 7)    | (Nguồn logic)
+  |   GPIO 3   |--------------------->|  CLK (Chân 10)   | (Clock chung 4 IC)
+  |   GPIO 4   |--------------------->|  DIO (Chân 9)    | (Data chung 4 IC)
+  |   GPIO 5   |--------------------->|  CS1 (Chân 11 IC1)|
+  |   GPIO 6   |--------------------->|  CS2 (Chân 11 IC2)|
+  |   GPIO 7   |--------------------->|  CS3 (Chân 11 IC3)|
+  |   GPIO 10  |--------------------->|  CS4 (Chân 11 IC4)|
+  +------------+                      +------------------+
+                                      | LED_VDD (14, 21) | <--- (+) Nguồn 5V Ngoài (2A - 5A)
+                                      +------------------+
 ```
 
----
-
-## 3. Cách Sử Dụng & Thử Nghiệm
-
-### Cách 1: Nhấn Nút Phần Cứng
-- Nhấn nút nối giữa **GPIO 0** và **GND**: Máy in sẽ lập tức in 1 phiếu theo mẫu và tự động nhảy số thứ tự tiếp theo.
-
-### Cách 2: Điều Khiển Qua Cổng COM (Serial Monitor)
-Mở Serial Monitor (Baud rate: `115200` trên cổng `COM6` của ESP32-C3) và gõ:
-- **`PRINT`** hoặc phím **`Enter`**: In 1 phiếu số tiếp theo.
-- **`<số>`** (Ví dụ: `1002`, `2005`): In phiếu với số chỉ định theo yêu cầu.
-- **`LOGO`**: In thử riêng hình ảnh Logo để kiểm tra đầu in.
-- **`CONFIG`**: Xem thông tin cấu hình đang nạp trong máy.
-- **`HELP`**: Xem danh sách lệnh.
+### ⚠️ Quy tắc cấp nguồn an toàn:
+* **LED_VDD (Chân 14, 21):** Phải dùng **Nguồn 5V ngoài** riêng (hoặc củ sạc 5V/2A trở lên). Tuyệt đối **KHÔNG** lấy nguồn LED từ chân 3.3V của ESP32 để tránh sụt áp gây reset hoặc cháy IC nguồn ESP32.
+* **VDD (Chân 7) và LED_VDD có nối chung được không?**
+  * **Được:** Nếu nối chung cả hai vào nguồn 5V ngoài. Lúc này cấp luôn 5V đó vào chân `VIN / 5V` của ESP32.
+  * **Tốt nhất:** Tách riêng `VDD` nối 3.3V của ESP32, còn `LED_VDD` nối 5V ngoài để mức tín hiệu logic chuẩn 100% 3.3V.
 
 ---
 
-## 4. Biên Dịch & Nạp Lên ESP32-C3
+## 4. BẢNG MÃ LỆNH CHUẨN CỦA HT16D35A (Datasheet)
 
-Chạy lệnh tự động hóa:
-```powershell
-python cloud_builder.py
-```
-Hệ thống sẽ build firmware bằng Docker ESP-IDF v5.1 trên GitHub Actions và nạp trực tiếp qua cổng COM vào ESP32-C3.
+* `0x01`: **Software Reset** - Khởi động lại thanh ghi IC.
+* `0x34` + `0x01`: **Master Mode** - IC phát xung đồng bộ SYNC.
+* `0x34` + `0x03`: **Slave Mode** - IC nhận xung đồng bộ SYNC từ Master.
+* `0x31` + `0x07`: **COM Number** - Bật đầy đủ 8 cổng COM (COM0 - COM7).
+* `0x30` + `0x00`: **Binary Mode** - Chế độ hiển thị bật/tắt ma trận cơ bản.
+* `0x38` + `0x40`: **Global Brightness** - Đặt độ sáng PWM tối đa (64/64).
+* `0x35` + `0x03`: **System Control** - Bật bộ dao động (`OSC ON`) và bật hiển thị (`Display ON`).
+* `0x80` + `Address` + `Data...`: **Write DDRAM** - Ghi dữ liệu ma trận LED vào RAM hiển thị.
+
+---
+
+## 5. CÁC CÁCH BIÊN DỊCH VÀ NẠP FIRMWARE
+
+### Cách 1: Nạp tự động qua Cloud GitHub Actions (ESP-IDF v5.1)
+Trong thư mục đã có sẵn script nạp tự động:
+1. Cắm cáp USB kết nối ESP32-C3 vào máy tính (Cổng `COM6`).
+2. Nhấp đúp chuột chạy file: **`build_and_flash.bat`**
+3. Hệ thống sẽ tự động đồng bộ code lên GitHub, biên dịch bằng ESP-IDF container và tự động nạp thẳng vào ESP32-C3.
+
+### Cách 2: Nạp bằng phần mềm Arduino IDE
+Nếu bạn quen dùng Arduino IDE:
+1. Mở file: **`HT16D35A_ESP32C3.ino`**
+2. Chọn Board: **ESP32C3 Dev Module**
+3. Chọn đúng cổng COM và nhấn **Upload**.
