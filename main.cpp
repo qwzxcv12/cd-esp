@@ -6,15 +6,15 @@
  * ============================================================================
  * 
  * SƠ ĐỒ ĐẤU NỐI ESP32-C3 -> MẠCH 4x HT16D35A:
- * - GND          -> GND ESP32-C3 & Mass nguồn 5V
- * - VDD (Logic)  -> 3.3V ESP32-C3 (hoặc 5V ngoài nếu nối chung)
- * - LED_VDD      -> Dương nguồn 5V ngoài (Chân 14, 21 trên IC)
+ * - GND          -> GND ESP32-C3 & Mass nguồn 5V ngoài
+ * - VDD (Logic)  -> 3.3V ESP32-C3
+ * - LED_VDD      -> Dương nguồn 5V công suất ngoài (Chân 14, 21 trên IC)
  * - CLK          -> GPIO 1 (Chân 10 trên IC, nối chung cả 4 IC)
  * - DIO          -> GPIO 0 (Chân 9 trên IC, nối chung cả 4 IC)
- * - CS1          -> GPIO 20 (Chân 11 của IC 1 - Master)
- * - CS2          -> GPIO 21 (Chân 11 của IC 2 - Slave 1)
- * - CS3          -> GPIO 9 (Chân 11 của IC 3 - Slave 2)
- * - CS4          -> GPIO 10 (Chân 11 của IC 4 - Slave 3)
+ * - CS1          -> GPIO 20 (Chân 11 của IC 1)
+ * - CS2          -> GPIO 21 (Chân 11 của IC 2)
+ * - CS3          -> GPIO 9  (Chân 11 của IC 3)
+ * - CS4          -> GPIO 10 (Chân 11 của IC 4)
  * ============================================================================
  */
 
@@ -34,30 +34,43 @@ static const char *TAG = "HT16D35A_ESP32C3";
 #define PIN_CLK         GPIO_NUM_1   // Xung nhịp Clock (Chân 10)
 #define PIN_DIO         GPIO_NUM_0   // Dữ liệu Data (Chân 9)
 
-#define PIN_CS1         GPIO_NUM_20  // Chip Select IC 1 (Master)
-#define PIN_CS2         GPIO_NUM_21  // Chip Select IC 2 (Slave 1)
-#define PIN_CS3         GPIO_NUM_9   // Chip Select IC 3 (Slave 2)
-#define PIN_CS4         GPIO_NUM_10  // Chip Select IC 4 (Slave 3)
+#define PIN_CS1         GPIO_NUM_20  // Chip Select IC 1
+#define PIN_CS2         GPIO_NUM_21  // Chip Select IC 2
+#define PIN_CS3         GPIO_NUM_9   // Chip Select IC 3
+#define PIN_CS4         GPIO_NUM_10  // Chip Select IC 4
 
 #define NUM_ICS         4
 static const gpio_num_t CS_PINS[NUM_ICS] = {PIN_CS1, PIN_CS2, PIN_CS3, PIN_CS4};
 
-// --- BẢNG MÃ LỆNH CHUẨN THỰC TẾ HT16D35A (Holtek / Pimoroni) ---
-#define CMD_SOFT_RESET       0xCC // Lệnh Reset mềm thực tế của HT16D35A
-#define CMD_SOFT_RESET_ALT   0x00 // Lệnh Reset mềm phụ
-#define CMD_GLOBAL_BRIGHTNESS 0x37 // Cài đặt độ sáng PWM (0x3F = 63 max PWM)
-#define CMD_SCROLL_CTRL      0x20 // Điều khiển cuộn (0x00 = tắt cuộn)
-#define CMD_COM_PIN_CTRL     0x41 // BẬT CỔNG COM (0xFF = mở COM0..COM7)
-#define CMD_ROW_PIN_CTRL     0x42 // BẬT CỔNG ROW (4 bytes 0xFF = mở ROW0..ROW27)
-#define CMD_SYSTEM_CTRL      0x35 // Bật Osc và Display (0x03 = Osc ON + Display ON)
-#define CMD_WRITE_DDRAM      0x80 // Ghi dữ liệu vào RAM hiển thị (DDRAM)
+// --- BẢNG MÃ LỆNH CHUẨN HOLTEK HT16D35A (Datasheet Holtek) ---
+#define CMD_SOFT_RESET          0xCC // Reset mềm chính
+#define CMD_SOFT_RESET_ALT      0x00 // Reset mềm phụ
+#define CMD_BINARY_MODE         0x31 // 0x01 = Chế độ Binary Mode (1 bit/LED)
+#define CMD_COM_NUMBER          0x32 // 0x07 = Bật đủ 8 chân COM (COM0..COM7)
+#define CMD_CASCADE_MODE        0x34 // 0x01 = IRC Master độc lập từng chip
+#define CMD_SYSTEM_CTRL         0x35 // 0x03 = Osc ON + Display ON, 0x00 = Standby
+#define CMD_CURRENT_RATIO       0x36 // 0x07 = Dòng quét cực đại 8/8
+#define CMD_GLOBAL_BRIGHTNESS   0x37 // 0x3F = Độ sáng PWM tối đa 63/63
+#define CMD_FUNCTION_ENABLE     0x38 // 0x00 = Tắt fade/blink để hiển thị trực tiếp
+#define CMD_SCROLL_CTRL         0x20 // 0x00 = Tắt cuộn phần cứng
+#define CMD_COM_PIN_CTRL        0x41 // 0xFF = Mở công suất COM0..COM7
+#define CMD_ROW_PIN_CTRL        0x42 // 4 bytes 0xFF = Mở công suất ROW0..ROW27
+#define CMD_WRITE_DDRAM         0x80 // Ghi dữ liệu vào DDRAM (Bắt đầu từ địa chỉ 0x00)
 
-// Hàm trễ microsecond dùng ROM function cho độ chính xác cao
+// Cấu hình ma trận RAM trong Binary Mode:
+// Mỗi IC có 28 hàng (ROW 0..27). Mỗi hàng gồm 1 byte (8 bits cho COM 0..7).
+#define NUM_ROWS_PER_IC  28
+#define TOTAL_COLS       (NUM_ICS * NUM_ROWS_PER_IC) // 112 cột khi đặt ngang
+
+// Framebuffer toàn cục: Đúng 28 bytes cho mỗi IC (Tổng cộng 112 bytes)
+static uint8_t fb[NUM_ICS][NUM_ROWS_PER_IC];
+
+// Hàm trễ microsecond
 static inline void delay_us(uint32_t us) {
     esp_rom_delay_us(us);
 }
 
-// Hàm gửi 1 byte theo giao thức 3-wire (MSB first, chốt ở cạnh lên CLK, CLK nghỉ ở mức LOW)
+// Gửi 1 byte theo giao thức 3-wire SPI (MSB first, chốt ở cạnh lên CLK)
 static void write_byte(uint8_t data) {
     for (int i = 7; i >= 0; i--) {
         gpio_set_level(PIN_CLK, 0);
@@ -70,80 +83,75 @@ static void write_byte(uint8_t data) {
     delay_us(1);
 }
 
-// Gửi lệnh đơn (1 byte)
+// Gửi lệnh 1 byte
 static void send_cmd_1b(uint8_t ic_idx, uint8_t cmd) {
     if (ic_idx >= NUM_ICS) return;
     gpio_set_level(CS_PINS[ic_idx], 0);
-    delay_us(5);
+    delay_us(4);
     write_byte(cmd);
-    delay_us(5);
+    delay_us(4);
     gpio_set_level(CS_PINS[ic_idx], 1);
-    delay_us(5);
+    delay_us(4);
 }
 
-// Gửi lệnh 2 bytes (Mã lệnh + 1 tham số)
+// Gửi lệnh 2 bytes
 static void send_cmd_2b(uint8_t ic_idx, uint8_t cmd, uint8_t p1) {
     if (ic_idx >= NUM_ICS) return;
     gpio_set_level(CS_PINS[ic_idx], 0);
-    delay_us(5);
+    delay_us(4);
     write_byte(cmd);
     write_byte(p1);
-    delay_us(5);
+    delay_us(4);
     gpio_set_level(CS_PINS[ic_idx], 1);
-    delay_us(5);
+    delay_us(4);
 }
 
-// Gửi lệnh 5 bytes (Mã lệnh + 4 tham số, dùng cho ROW PIN CTRL 0x42)
+// Gửi lệnh 5 bytes (ROW PIN CTRL 0x42)
 static void send_cmd_5b(uint8_t ic_idx, uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
     if (ic_idx >= NUM_ICS) return;
     gpio_set_level(CS_PINS[ic_idx], 0);
-    delay_us(5);
+    delay_us(4);
     write_byte(cmd);
     write_byte(p1);
     write_byte(p2);
     write_byte(p3);
     write_byte(p4);
-    delay_us(5);
+    delay_us(4);
     gpio_set_level(CS_PINS[ic_idx], 1);
-    delay_us(5);
+    delay_us(4);
 }
 
-#define NUM_ROWS        28
-#define NUM_COLS        8
-#define BYTES_PER_IC    224
-
-// Bộ đệm hiển thị đồ họa toàn cục cho 4 IC
-static uint8_t fb[NUM_ICS][BYTES_PER_IC];
+// Đảo ngược thứ tự bit (dùng khi chân COM bị ngược chiều)
+static inline uint8_t rev_byte(uint8_t b) {
+    b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+    b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+    b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+    return b;
+}
 
 // Xóa sạch Framebuffer
 static void fb_clear(void) {
     memset(fb, 0, sizeof(fb));
 }
 
-// Điền giá trị cho toàn bộ Framebuffer
-static void fb_fill(uint8_t val) {
-    memset(fb, val, sizeof(fb));
+// Điền toàn bộ Framebuffer
+static void fb_fill(uint8_t pattern) {
+    memset(fb, pattern, sizeof(fb));
 }
 
-// Đặt độ sáng cho 1 điểm: row (0..27), col (0..7)
-static void fb_set_pixel(uint8_t ic, uint8_t row, uint8_t col, uint8_t val) {
-    if (ic >= NUM_ICS || row >= NUM_ROWS || col >= NUM_COLS) return;
-    fb[ic][row * NUM_COLS + col] = val;
-}
-
-// Gửi Framebuffer xuống cả 4 IC HT16D35A
+// Gửi Framebuffer xuống cả 4 IC HT16D35A: Đúng chuẩn 28 bytes/IC!
 static void fb_render(void) {
     for (uint8_t ic = 0; ic < NUM_ICS; ic++) {
         gpio_set_level(CS_PINS[ic], 0);
-        delay_us(3);
-        write_byte(CMD_WRITE_DDRAM);
-        write_byte(0x00);
-        for (int i = 0; i < BYTES_PER_IC; i++) {
-            write_byte(fb[ic][i]);
+        delay_us(4);
+        write_byte(CMD_WRITE_DDRAM); // Lệnh ghi DDRAM (0x80)
+        write_byte(0x00);            // Bắt đầu từ địa chỉ 0x00 (ROW 0)
+        for (int r = 0; r < NUM_ROWS_PER_IC; r++) {
+            write_byte(fb[ic][r]);   // Đúng 28 bytes từ 0x00 đến 0x1B
         }
-        delay_us(3);
+        delay_us(4);
         gpio_set_level(CS_PINS[ic], 1);
-        delay_us(3);
+        delay_us(4);
     }
 }
 
@@ -155,54 +163,60 @@ static void set_global_brightness(uint8_t level) {
     }
 }
 
-// Ghi toàn bộ Display Data RAM của một IC (224 vị trí: 28 ROW x 8 COM)
-static void fill_display(uint8_t ic_idx, uint8_t pattern) {
-    if (ic_idx >= NUM_ICS) return;
-    gpio_set_level(CS_PINS[ic_idx], 0);
-    delay_us(5);
-    
-    write_byte(CMD_WRITE_DDRAM); // Lệnh ghi RAM (0x80)
-    write_byte(0x00);            // Bắt đầu từ địa chỉ 0x00
-
-    for (int i = 0; i < BYTES_PER_IC; i++) {
-        write_byte(pattern);
-    }
-
-    delay_us(5);
-    gpio_set_level(CS_PINS[ic_idx], 1);
-    delay_us(5);
-}
-
-// Khởi tạo một IC HT16D35A
+// Khởi tạo một IC HT16D35A ở chế độ chuẩn Binary Mode
 static void init_ht16d35a(uint8_t ic_idx) {
     // 1. Reset mềm IC
     send_cmd_1b(ic_idx, CMD_SOFT_RESET);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    delay_us(100);
     send_cmd_1b(ic_idx, CMD_SOFT_RESET_ALT);
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // 2. Cài đặt độ sáng PWM tối đa (0x37 -> 0x3F)
-    send_cmd_2b(ic_idx, CMD_GLOBAL_BRIGHTNESS, 0x3F);
+    // 2. Chuyển sang chế độ BINARY MODE (0x31 + 0x01)
+    send_cmd_2b(ic_idx, CMD_BINARY_MODE, 0x01);
 
-    // 3. Tắt chức năng cuộn màn hình (0x20 -> 0x00)
-    send_cmd_2b(ic_idx, CMD_SCROLL_CTRL, 0x00);
+    // 3. Cài đặt đủ 8 chân COM: COM0..COM7 (0x32 + 0x07)
+    send_cmd_2b(ic_idx, CMD_COM_NUMBER, 0x07);
 
-    // 4. Tạm tắt System Control để nạp cấu hình cổng (0x35 -> 0x00)
+    // 4. Cascade Mode IRC Master (0x34 + 0x01)
+    send_cmd_2b(ic_idx, CMD_CASCADE_MODE, 0x01);
+
+    // 5. Tạm dừng System Control để cấu hình (0x35 + 0x00)
     send_cmd_2b(ic_idx, CMD_SYSTEM_CTRL, 0x00);
 
-    // 5. Nạp dữ liệu ban đầu vào toàn bộ DDRAM
-    fill_display(ic_idx, 0x00);
+    // 6. Dòng quét cực đại 8/8 (0x36 + 0x07)
+    send_cmd_2b(ic_idx, CMD_CURRENT_RATIO, 0x07);
 
-    // 6. [CỰC KỲ QUAN TRỌNG] BẬT TOÀN BỘ CỔNG COM: 0x41 -> 0xFF (COM0..COM7)
+    // 7. Độ sáng PWM toàn cục cực đại 63/63 (0x37 + 0x3F)
+    send_cmd_2b(ic_idx, CMD_GLOBAL_BRIGHTNESS, 0x3F);
+
+    // 8. Tắt fade/blink/mask để hiển thị trực tiếp (0x38 + 0x00)
+    send_cmd_2b(ic_idx, CMD_FUNCTION_ENABLE, 0x00);
+
+    // 9. Tắt chức năng cuộn màn hình phần cứng (0x20 + 0x00)
+    send_cmd_2b(ic_idx, CMD_SCROLL_CTRL, 0x00);
+
+    // 10. Mở công suất toàn bộ cổng COM: 0x41 -> 0xFF (COM0..COM7)
     send_cmd_2b(ic_idx, CMD_COM_PIN_CTRL, 0xFF);
 
-    // 7. [CỰC KỲ QUAN TRỌNG] BẬT TOÀN BỘ CỔNG ROW: 0x42 -> 0xFF, 0xFF, 0xFF, 0xFF (ROW0..ROW27)
+    // 11. Mở công suất toàn bộ cổng ROW: 0x42 -> 0xFF, 0xFF, 0xFF, 0xFF (ROW0..ROW27)
     send_cmd_5b(ic_idx, CMD_ROW_PIN_CTRL, 0xFF, 0xFF, 0xFF, 0xFF);
 
-    // 8. BẬT BỘ DAO ĐỘNG HỆ THỐNG VÀ BẬT HIỂN THỊ (0x35 -> 0x03)
+    // 12. Xóa sạch RAM hiển thị (Ghi 28 bytes 0x00 vào địa chỉ 0x00)
+    gpio_set_level(CS_PINS[ic_idx], 0);
+    delay_us(4);
+    write_byte(CMD_WRITE_DDRAM);
+    write_byte(0x00);
+    for (int r = 0; r < NUM_ROWS_PER_IC; r++) {
+        write_byte(0x00);
+    }
+    delay_us(4);
+    gpio_set_level(CS_PINS[ic_idx], 1);
+    delay_us(4);
+
+    // 13. Bật bộ dao động hệ thống và bật hiển thị (0x35 + 0x03)
     send_cmd_2b(ic_idx, CMD_SYSTEM_CTRL, 0x03);
 
-    ESP_LOGI(TAG, "IC %d: Khoi tao thanh cong voi COM PIN CTRL (0x41) va ROW PIN CTRL (0x42)", ic_idx + 1);
+    ESP_LOGI(TAG, "IC %d: Khoi tao thanh cong Binary Mode (28 rows x 8 COMs)", ic_idx + 1);
 }
 
 // Cấu hình các chân GPIO của ESP32-C3
@@ -211,7 +225,7 @@ static void init_gpio(void) {
     gpio_reset_pin(PIN_DIO);
     gpio_set_direction(PIN_CLK, GPIO_MODE_OUTPUT);
     gpio_set_direction(PIN_DIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(PIN_CLK, 0); // CLK nghỉ ở mức LOW theo chuẩn SPI Mode 0
+    gpio_set_level(PIN_CLK, 0); // CLK nghỉ ở mức LOW
     gpio_set_level(PIN_DIO, 0);
 
     for (int i = 0; i < NUM_ICS; i++) {
@@ -224,8 +238,55 @@ static void init_gpio(void) {
 // ============================================================================
 // BẢNG FONT CHỮ & CHỮ SỐ CHUẨN 8x8 (NÉT ĐẬM TO RÕ RÀNG)
 // ============================================================================
-static const uint8_t FONT_8X8[][8] = {
-    // 0 .. 9 (index 0 .. 9)
+
+// 1. Font dạng Cột (Column-Major): Phù hợp cho hiển thị Ngang (112 cột x 8 hàng)
+// Mỗi byte tương ứng 1 cột 8 điểm ảnh (bit 0 = hàng trên cùng, bit 7 = hàng dưới cùng)
+static const uint8_t FONT_COL_8X8[40][8] = {
+    {0x00, 0x3E, 0x7F, 0x49, 0x45, 0x7F, 0x3E, 0x00}, // '0' (idx 0)
+    {0x00, 0x40, 0x42, 0x7F, 0x7F, 0x40, 0x40, 0x00}, // '1' (idx 1)
+    {0x00, 0x62, 0x73, 0x59, 0x4D, 0x47, 0x42, 0x00}, // '2' (idx 2)
+    {0x00, 0x22, 0x63, 0x49, 0x5D, 0x7F, 0x22, 0x00}, // '3' (idx 3)
+    {0x00, 0x18, 0x1C, 0x16, 0x73, 0x7F, 0x10, 0x00}, // '4' (idx 4)
+    {0x00, 0x27, 0x67, 0x45, 0x45, 0x7D, 0x39, 0x00}, // '5' (idx 5)
+    {0x00, 0x3E, 0x7F, 0x49, 0x49, 0x7B, 0x32, 0x00}, // '6' (idx 6)
+    {0x00, 0x03, 0x03, 0x79, 0x7D, 0x07, 0x03, 0x00}, // '7' (idx 7)
+    {0x00, 0x36, 0x7F, 0x49, 0x49, 0x7F, 0x36, 0x00}, // '8' (idx 8)
+    {0x00, 0x26, 0x6F, 0x49, 0x49, 0x7F, 0x3E, 0x00}, // '9' (idx 9)
+    {0x00, 0x7E, 0x7F, 0x09, 0x09, 0x7F, 0x7E, 0x00}, // 'A' (idx 10)
+    {0x00, 0x7F, 0x7F, 0x49, 0x49, 0x7F, 0x36, 0x00}, // 'B' (idx 11)
+    {0x00, 0x3E, 0x7F, 0x41, 0x41, 0x63, 0x22, 0x00}, // 'C' (idx 12)
+    {0x00, 0x7F, 0x7F, 0x41, 0x63, 0x3E, 0x1C, 0x00}, // 'D' (idx 13)
+    {0x00, 0x7F, 0x7F, 0x49, 0x49, 0x49, 0x41, 0x00}, // 'E' (idx 14)
+    {0x00, 0x7F, 0x7F, 0x09, 0x09, 0x09, 0x01, 0x00}, // 'F' (idx 15)
+    {0x00, 0x3E, 0x7F, 0x41, 0x49, 0x3B, 0x7A, 0x00}, // 'G' (idx 16)
+    {0x00, 0x7F, 0x7F, 0x08, 0x08, 0x7F, 0x7F, 0x00}, // 'H' (idx 17)
+    {0x00, 0x41, 0x41, 0x7F, 0x7F, 0x41, 0x41, 0x00}, // 'I' (idx 18)
+    {0x00, 0x20, 0x60, 0x41, 0x7F, 0x3F, 0x01, 0x00}, // 'J' (idx 19)
+    {0x00, 0x7F, 0x7F, 0x1C, 0x36, 0x63, 0x41, 0x00}, // 'K' (idx 20)
+    {0x00, 0x7F, 0x7F, 0x40, 0x40, 0x40, 0x40, 0x00}, // 'L' (idx 21)
+    {0x00, 0x7F, 0x7F, 0x06, 0x0C, 0x06, 0x7F, 0x7F}, // 'M' (idx 22)
+    {0x00, 0x7F, 0x7F, 0x0E, 0x1C, 0x7F, 0x7F, 0x00}, // 'N' (idx 23)
+    {0x00, 0x3E, 0x7F, 0x41, 0x41, 0x7F, 0x3E, 0x00}, // 'O' (idx 24)
+    {0x00, 0x7F, 0x7F, 0x09, 0x09, 0x0F, 0x06, 0x00}, // 'P' (idx 25)
+    {0x00, 0x1E, 0x3F, 0x21, 0x71, 0x7F, 0x5E, 0x00}, // 'Q' (idx 26)
+    {0x00, 0x7F, 0x7F, 0x19, 0x39, 0x6F, 0x46, 0x00}, // 'R' (idx 27)
+    {0x00, 0x26, 0x6F, 0x49, 0x49, 0x7B, 0x32, 0x00}, // 'S' (idx 28)
+    {0x00, 0x01, 0x01, 0x7F, 0x7F, 0x01, 0x01, 0x00}, // 'T' (idx 29)
+    {0x00, 0x3F, 0x7F, 0x40, 0x40, 0x7F, 0x3F, 0x00}, // 'U' (idx 30)
+    {0x00, 0x0F, 0x3F, 0x70, 0x70, 0x3F, 0x0F, 0x00}, // 'V' (idx 31)
+    {0x00, 0x7F, 0x7F, 0x30, 0x18, 0x30, 0x7F, 0x7F}, // 'W' (idx 32)
+    {0x00, 0x63, 0x77, 0x1C, 0x1C, 0x77, 0x63, 0x00}, // 'X' (idx 33)
+    {0x00, 0x07, 0x0F, 0x78, 0x78, 0x0F, 0x07, 0x00}, // 'Y' (idx 34)
+    {0x00, 0x61, 0x71, 0x59, 0x4D, 0x47, 0x43, 0x00}, // 'Z' (idx 35)
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // ' ' (idx 36)
+    {0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00}, // '-' (idx 37)
+    {0x00, 0x00, 0x00, 0x36, 0x36, 0x00, 0x00, 0x00}, // ':' (idx 38)
+    {0x00, 0x00, 0x00, 0x5F, 0x5F, 0x00, 0x00, 0x00}, // '!' (idx 39)
+};
+
+// 2. Font dạng Hàng (Row-Major): Phù hợp cho hiển thị Đứng (32 cột x 28 hàng)
+// Mỗi byte tương ứng 1 hàng 8 điểm ảnh
+static const uint8_t FONT_ROW_8X8[40][8] = {
     {0x3C, 0x66, 0x6E, 0x76, 0x66, 0x66, 0x3C, 0x00}, // 0
     {0x18, 0x38, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x00}, // 1
     {0x3C, 0x66, 0x0C, 0x18, 0x30, 0x60, 0x7E, 0x00}, // 2
@@ -236,8 +297,6 @@ static const uint8_t FONT_8X8[][8] = {
     {0x7E, 0x66, 0x0C, 0x18, 0x18, 0x18, 0x18, 0x00}, // 7
     {0x3C, 0x66, 0x66, 0x3C, 0x66, 0x66, 0x3C, 0x00}, // 8
     {0x3C, 0x66, 0x66, 0x3E, 0x06, 0x66, 0x3C, 0x00}, // 9
-
-    // A .. Z (index 10 .. 35)
     {0x3C, 0x66, 0x66, 0x7E, 0x66, 0x66, 0x66, 0x00}, // A
     {0x7C, 0x66, 0x66, 0x7C, 0x66, 0x66, 0x7C, 0x00}, // B
     {0x3C, 0x66, 0x60, 0x60, 0x60, 0x66, 0x3C, 0x00}, // C
@@ -264,206 +323,298 @@ static const uint8_t FONT_8X8[][8] = {
     {0x66, 0x66, 0x3C, 0x18, 0x3C, 0x66, 0x66, 0x00}, // X
     {0x66, 0x66, 0x66, 0x3C, 0x18, 0x18, 0x18, 0x00}, // Y
     {0x7E, 0x06, 0x0C, 0x18, 0x30, 0x60, 0x7E, 0x00}, // Z
-
-    // Ký tự đặc biệt: space, dash, colon (index 36, 37, 38)
-    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Space
-    {0x00, 0x00, 0x00, 0x7E, 0x7E, 0x00, 0x00, 0x00}, // -
-    {0x00, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00}  // :
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // ' '
+    {0x00, 0x00, 0x00, 0x7E, 0x7E, 0x00, 0x00, 0x00}, // '-'
+    {0x00, 0x18, 0x18, 0x00, 0x18, 0x18, 0x00, 0x00}, // ':'
+    {0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x00}, // '!'
 };
 
-static const uint8_t* get_font_char(char c) {
-    if (c >= '0' && c <= '9') return FONT_8X8[c - '0'];
-    if (c >= 'A' && c <= 'Z') return FONT_8X8[10 + (c - 'A')];
-    if (c >= 'a' && c <= 'z') return FONT_8X8[10 + (c - 'a')];
-    if (c == '-') return FONT_8X8[37];
-    if (c == ':') return FONT_8X8[38];
-    return FONT_8X8[36]; // Space
+static int get_char_index(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'Z') return 10 + (c - 'A');
+    if (c >= 'a' && c <= 'z') return 10 + (c - 'a');
+    if (c == '-') return 37;
+    if (c == ':') return 38;
+    if (c == '!') return 39;
+    return 36; // Khoảng trắng ' '
 }
 
-// Vẽ 1 ký tự TO RÕ RÀNG phóng to 3x chiếm trọn 1 IC (24 dòng LED x 8 cột)
-static void draw_char_big(uint8_t ic, char c, uint8_t brightness) {
+// ============================================================================
+// HÀM VẼ KÝ TỰ THEO HƯỚNG NGANG (HORIZONTAL: 112 CỘT x 8 HÀNG)
+// ============================================================================
+
+/**
+ * Vẽ 1 ký tự TO RÕ RÀNG căn giữa trên 1 IC (28 cột).
+ * @param ic: Chỉ số IC (0..3)
+ * @param c: Ký tự cần vẽ ('0'..'9', 'A'..'Z')
+ * @param scale: Tỉ lệ phóng to chiều ngang (1 = chuẩn 8 cột, 2 = to đậm 16 cột, 3 = cực to 24 cột)
+ * @param rev_com: Đảo ngược thứ tự COM (true nếu chữ bị lộn ngược đầu)
+ */
+static void draw_char_H(uint8_t ic, char c, uint8_t scale, bool rev_com) {
     if (ic >= NUM_ICS) return;
-    const uint8_t *glyph = get_font_char(c);
-    
-    // Xóa sạch IC này trong framebuffer
-    for (int i = 0; i < BYTES_PER_IC; i++) {
-        fb[ic][i] = 0;
+    int idx = get_char_index(c);
+    const uint8_t *cols = FONT_COL_8X8[idx];
+
+    // Xóa sạch IC này
+    for (int r = 0; r < NUM_ROWS_PER_IC; r++) {
+        fb[ic][r] = 0;
     }
 
-    // Phóng to 3x theo chiều dọc (8 dòng font -> 24 dòng LED từ dòng 2 đến 25)
-    for (int r = 0; r < 8; r++) {
-        uint8_t row_bits = glyph[r];
-        int base_row = 2 + r * 3;
-        for (int c_idx = 0; c_idx < 8; c_idx++) {
-            if (row_bits & (1 << (7 - c_idx))) {
-                fb_set_pixel(ic, base_row,     c_idx, brightness);
-                fb_set_pixel(ic, base_row + 1, c_idx, brightness);
-                fb_set_pixel(ic, base_row + 2, c_idx, brightness);
+    int total_w = 8 * scale;
+    if (total_w > NUM_ROWS_PER_IC) total_w = NUM_ROWS_PER_IC;
+    int start_col = (NUM_ROWS_PER_IC - total_w) / 2; // Căn chính giữa 28 cột của IC
+
+    for (int col_i = 0; col_i < 8; col_i++) {
+        uint8_t col_val = cols[col_i];
+        if (rev_com) col_val = rev_byte(col_val);
+
+        for (int s = 0; s < scale; s++) {
+            int target_col = start_col + col_i * scale + s;
+            if (target_col < NUM_ROWS_PER_IC) {
+                fb[ic][target_col] = col_val;
             }
         }
     }
 }
 
-// Hiển thị 4 ký tự TO cùng lúc trên 4 IC độc lập
-static void display_text_4chars(const char *str) {
+// Hiển thị chuỗi 4 ký tự to trên 4 IC (Mỗi IC 1 ký tự to)
+static void display_4chars_H(const char *str, uint8_t scale, bool rev_com) {
     fb_clear();
+    int len = strlen(str);
     for (int i = 0; i < NUM_ICS; i++) {
-        if (str[i] != '\0') {
-            draw_char_big(i, str[i], 0xFF);
+        if (i < len && str[i] != '\0') {
+            draw_char_H(i, str[i], scale, rev_com);
         }
     }
     fb_render();
 }
 
 // ============================================================================
-// CÁC HIỆU ỨNG HÌNH ẢNH (VISUAL ANIMATION EFFECTS)
+// HÀM VẼ KÝ TỰ THEO HƯỚNG ĐỨNG (VERTICAL: 32 CỘT x 28 HÀNG)
 // ============================================================================
 
-// Hiệu ứng 1: Quét sóng ánh sáng tuần hoàn qua lại 4 IC
+/**
+ * Vẽ 1 ký tự TO RÕ trên 1 IC (khi bo mạch đặt thẳng đứng: 8 cột x 28 hàng).
+ * Phóng to 3x theo chiều dọc (chiếm 24 hàng trên 28 hàng).
+ */
+static void draw_char_V(uint8_t ic, char c, bool rev_bits) {
+    if (ic >= NUM_ICS) return;
+    int idx = get_char_index(c);
+    const uint8_t *rows = FONT_ROW_8X8[idx];
+
+    for (int r = 0; r < NUM_ROWS_PER_IC; r++) {
+        fb[ic][r] = 0;
+    }
+
+    // Phóng to 3x chiều dọc: 8 hàng font -> 24 hàng (hàng 2 đến 25)
+    for (int r = 0; r < 8; r++) {
+        uint8_t val = rows[r];
+        if (rev_bits) val = rev_byte(val);
+        int base = 2 + r * 3;
+        if (base + 2 < NUM_ROWS_PER_IC) {
+            fb[ic][base]     = val;
+            fb[ic][base + 1] = val;
+            fb[ic][base + 2] = val;
+        }
+    }
+}
+
+static void display_4chars_V(const char *str, bool rev_bits) {
+    fb_clear();
+    int len = strlen(str);
+    for (int i = 0; i < NUM_ICS; i++) {
+        if (i < len && str[i] != '\0') {
+            draw_char_V(i, str[i], rev_bits);
+        }
+    }
+    fb_render();
+}
+
+// ============================================================================
+// CHỨC NĂNG CUỘN CHỮ MARQUEE MƯỢT MÀ QUA CẢ 112 CỘT (HORIZONTAL SCROLL)
+// ============================================================================
+static void scroll_text_H(const char *text, int speed_ms, bool rev_com) {
+    ESP_LOGI(TAG, ">>> MARQUEE SCROLL: \"%s\"", text);
+    int text_len = strlen(text);
+    int char_w = 8; // Mỗi ký tự 8 cột (có khoảng cách đệm sẵn)
+    int total_text_cols = text_len * char_w;
+
+    // Buffer chứa toàn bộ dòng chữ
+    uint8_t *stream = (uint8_t *)calloc(total_text_cols, sizeof(uint8_t));
+    if (!stream) return;
+
+    for (int i = 0; i < text_len; i++) {
+        int idx = get_char_index(text[i]);
+        const uint8_t *cols = FONT_COL_8X8[idx];
+        for (int c = 0; c < 8; c++) {
+            uint8_t val = cols[c];
+            if (rev_com) val = rev_byte(val);
+            stream[i * char_w + c] = val;
+        }
+    }
+
+    // Cuộn từ mép phải màn hình sang hết mép trái
+    int max_scroll = total_text_cols + TOTAL_COLS;
+    for (int offset = 0; offset < max_scroll; offset++) {
+        fb_clear();
+        for (int screen_col = 0; screen_col < TOTAL_COLS; screen_col++) {
+            int t_idx = offset - (TOTAL_COLS - screen_col);
+            if (t_idx >= 0 && t_idx < total_text_cols) {
+                uint8_t ic = screen_col / NUM_ROWS_PER_IC;
+                uint8_t row = screen_col % NUM_ROWS_PER_IC;
+                fb[ic][row] = stream[t_idx];
+            }
+        }
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(speed_ms));
+    }
+
+    free(stream);
+}
+
+// ============================================================================
+// CHỨC NĂNG CHẨN ĐOÁN CHIỀU VÀ TỌA ĐỘ PHẦN CỨNG (DIAGNOSTIC TEST)
+// ============================================================================
+static void diagnostic_sweep(void) {
+    ESP_LOGI(TAG, "=== TEST CHAN DOAN TOA DO & CHIEN QUET MA TRAN LED ===");
+
+    // 1. Sáng tuần tự từng chip từ IC 1 đến IC 4 (mỗi chip 600ms)
+    for (int i = 0; i < NUM_ICS; i++) {
+        ESP_LOGI(TAG, "-> Kiem tra sang tron ven IC %d", i + 1);
+        fb_clear();
+        for (int r = 0; r < NUM_ROWS_PER_IC; r++) fb[i][r] = 0xFF;
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(600));
+    }
+    fb_clear();
+    fb_render();
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    // 2. Quét 1 vạch sáng chạy ngang qua 112 cột từ cột 0 đến cột 111
+    ESP_LOGI(TAG, "-> Quet 1 vach sang chay qua 112 cot");
+    for (int c = 0; c < TOTAL_COLS; c += 2) {
+        fb_clear();
+        uint8_t ic = c / NUM_ROWS_PER_IC;
+        uint8_t r = c % NUM_ROWS_PER_IC;
+        fb[ic][r] = 0xFF;
+        if (r + 1 < NUM_ROWS_PER_IC) fb[ic][r + 1] = 0xFF;
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    fb_clear();
+    fb_render();
+}
+
+// ============================================================================
+// CÁC BÀI TEST CHỮ SỐ & CHỮ CÁI TO RÕ RÀNG
+// ============================================================================
+
+// Test 1: Đếm các số to từ 1 đến 9 (Phóng to 2x bề ngang, nét đôi cực rõ)
+static void test_digits_1_to_9_big(bool rev_com) {
+    ESP_LOGI(TAG, "=== 1. DEM SO TO TU 1 DEN 9 (PHONG TO 2X NET DOI DAM) ===");
+    for (char c = '1'; c <= '9'; c++) {
+        ESP_LOGI(TAG, "-> So to: %c", c);
+        char buf[5] = {c, c, c, c, '\0'};
+        display_4chars_H(buf, 2, rev_com); // Scale 2x
+        vTaskDelay(pdMS_TO_TICKS(1100));
+    }
+}
+
+// Test 2: Đếm các số to cực đại 3x (Phóng to 24 cột chiếm trọn IC)
+static void test_digits_1_to_9_huge(bool rev_com) {
+    ESP_LOGI(TAG, "=== 2. SO TO CUC DAI 3X (24 COT CHIEM TRON IC) ===");
+    for (char c = '1'; c <= '9'; c++) {
+        ESP_LOGI(TAG, "-> So cuc to 3x: %c", c);
+        char buf[5] = {c, c, c, c, '\0'};
+        display_4chars_H(buf, 3, rev_com); // Scale 3x
+        vTaskDelay(pdMS_TO_TICKS(900));
+    }
+}
+
+// Test 3: Nhóm 4 số và chữ cái (Mỗi IC 1 ký tự khác nhau)
+static void test_groups_4chars(bool rev_com) {
+    ESP_LOGI(TAG, "=== 3. NHOM 4 SO VA CHU CAI TO TRUC QUAN ===");
+    const char *groups[] = {
+        "1234", "5678", "9012",
+        "ABCD", "EFGH", "IJKL",
+        "MNOP", "QRST", "UVWX", "YZ-!"
+    };
+    int n = sizeof(groups) / sizeof(groups[0]);
+    for (int i = 0; i < n; i++) {
+        ESP_LOGI(TAG, "-> Nhom ky tu: %s", groups[i]);
+        display_4chars_H(groups[i], 2, rev_com);
+        vTaskDelay(pdMS_TO_TICKS(1500));
+    }
+}
+
+// Test 4: Chữ cái to A -> Z tuần tự
+static void test_letters_A_to_Z(bool rev_com) {
+    ESP_LOGI(TAG, "=== 4. CHU CAI TO TU A DEN Z ===");
+    for (char c = 'A'; c <= 'Z'; c++) {
+        ESP_LOGI(TAG, "-> Chu cai to: %c", c);
+        char buf[5] = {c, c, c, c, '\0'};
+        display_4chars_H(buf, 2, rev_com);
+        vTaskDelay(pdMS_TO_TICKS(600));
+    }
+}
+
+// Test 5: Hiển thị chế độ dọc (Dành cho mạch xoay đứng 32x28)
+static void test_vertical_mode(void) {
+    ESP_LOGI(TAG, "=== 5. CHE DO DUNG (VERTICAL 8x24 TALL CHO MOI IC) ===");
+    const char *groups[] = {"1234", "5678", "ABCD", "WXYZ"};
+    int n = sizeof(groups) / sizeof(groups[0]);
+    for (int i = 0; i < n; i++) {
+        ESP_LOGI(TAG, "-> Chu dung: %s", groups[i]);
+        display_4chars_V(groups[i], false);
+        vTaskDelay(pdMS_TO_TICKS(1500));
+    }
+}
+
+// ============================================================================
+// HIỆU ỨNG HÌNH ẢNH TRÌNH DIỄN (VISUAL EFFECTS)
+// ============================================================================
+
+// Hiệu ứng sóng ánh sáng quét qua lại 112 cột
 static void effect_wave_scan(int duration_ms) {
-    ESP_LOGI(TAG, ">>> HIEU UNG 1: SONG ANH SANG QUET (SCANNING WAVE)");
-    int total_rows = NUM_ICS * NUM_ROWS; // 112 hàng
-    int end_steps = duration_ms / 30;
+    ESP_LOGI(TAG, ">>> HIEU UNG: SONG ANH SANG QUET (SCANNING WAVE)");
+    int steps = duration_ms / 25;
     int head = 0;
     int dir = 1;
-    for (int step = 0; step < end_steps; step++) {
+    for (int s = 0; s < steps; s++) {
         fb_clear();
-        for (int t = 0; t < 6; t++) {
-            int r = head - t * dir;
-            if (r >= 0 && r < total_rows) {
-                uint8_t ic = r / NUM_ROWS;
-                uint8_t row = r % NUM_ROWS;
-                uint8_t val = (t == 0) ? 0xFF : (t == 1 ? 0xB0 : (t == 2 ? 0x60 : (t == 3 ? 0x30 : 0x10)));
-                for (uint8_t col = 0; col < NUM_COLS; col++) {
-                    fb_set_pixel(ic, row, col, val);
-                }
+        for (int t = 0; t < 5; t++) {
+            int c = head - t * dir;
+            if (c >= 0 && c < TOTAL_COLS) {
+                uint8_t ic = c / NUM_ROWS_PER_IC;
+                uint8_t r = c % NUM_ROWS_PER_IC;
+                uint8_t mask = (t == 0) ? 0xFF : (t == 1 ? 0x7E : (t == 2 ? 0x3C : 0x18));
+                fb[ic][r] = mask;
             }
         }
         fb_render();
         head += dir;
-        if (head >= total_rows - 1) dir = -1;
+        if (head >= TOTAL_COLS - 1) dir = -1;
         else if (head <= 0) dir = 1;
-        vTaskDelay(pdMS_TO_TICKS(30));
+        vTaskDelay(pdMS_TO_TICKS(25));
     }
 }
 
-// Hiệu ứng 2: Nhịp thở ánh sáng êm dịu (Breathing / Pulse)
-static void effect_breathing(int duration_ms) {
-    ESP_LOGI(TAG, ">>> HIEU UNG 2: NHIP THO (BREATHING PULSE)");
-    fb_fill(0xFF);
-    fb_render();
-    int steps = duration_ms / 30;
-    for (int step = 0; step < steps; step++) {
-        float angle = (float)step * 0.1f;
-        uint8_t bri = (uint8_t)(31.5f * (1.0f + sinf(angle)));
-        set_global_brightness(bri);
-        vTaskDelay(pdMS_TO_TICKS(30));
-    }
-    set_global_brightness(63); // Trả lại độ sáng cực đại
-}
-
-// Hiệu ứng 3: Mưa sao băng ma trận (Digital Matrix Rain)
-static void effect_matrix_rain(int duration_ms) {
-    ESP_LOGI(TAG, ">>> HIEU UNG 3: MUA SAO BANG (DIGITAL MATRIX RAIN)");
-    int total_cols = NUM_ICS * NUM_COLS; // 32 cột
-    int drop_pos[32];
-    int drop_speed[32];
-    for (int i = 0; i < total_cols; i++) {
-        drop_pos[i] = rand() % NUM_ROWS;
-        drop_speed[i] = 1 + rand() % 2;
-    }
-    int steps = duration_ms / 40;
-    for (int step = 0; step < steps; step++) {
-        // Giảm mờ dần vết sáng cũ tạo đuôi rơi
-        for (int ic = 0; ic < NUM_ICS; ic++) {
-            for (int i = 0; i < BYTES_PER_IC; i++) {
-                fb[ic][i] = (uint8_t)(fb[ic][i] * 0.65f);
-            }
-        }
-        for (int c = 0; c < total_cols; c++) {
-            uint8_t ic = c / NUM_COLS;
-            uint8_t col = c % NUM_COLS;
-            fb_set_pixel(ic, drop_pos[c], col, 0xFF);
-            drop_pos[c] += drop_speed[c];
-            if (drop_pos[c] >= NUM_ROWS) {
-                drop_pos[c] = 0;
-                drop_speed[c] = 1 + rand() % 2;
-            }
-        }
-        fb_render();
-        vTaskDelay(pdMS_TO_TICKS(40));
-    }
-}
-
-// Hiệu ứng 4: Cột sóng âm thanh nhảy nhót (Equalizer VU-Meter)
-static void effect_equalizer(int duration_ms) {
-    ESP_LOGI(TAG, ">>> HIEU UNG 4: SONG NHAC (EQUALIZER VU-METER)");
-    int total_cols = NUM_ICS * NUM_COLS; // 32 cột âm thanh
-    float heights[32] = {0};
-    float targets[32] = {0};
-    int steps = duration_ms / 35;
-    for (int step = 0; step < steps; step++) {
-        fb_clear();
-        if (step % 5 == 0) {
-            for (int c = 0; c < total_cols; c++) {
-                targets[c] = 2 + (rand() % (NUM_ROWS - 2));
-            }
-        }
-        for (int c = 0; c < total_cols; c++) {
-            heights[c] += (targets[c] - heights[c]) * 0.35f;
-            int h = (int)heights[c];
-            uint8_t ic = c / NUM_COLS;
-            uint8_t col = c % NUM_COLS;
-            for (int r = 0; r < h; r++) {
-                uint8_t val = (r > h - 3) ? 0xFF : 0x70;
-                fb_set_pixel(ic, r, col, val);
-            }
-            if (h < NUM_ROWS) {
-                fb_set_pixel(ic, h, col, 0xFF); // Đỉnh cột sóng
-            }
-        }
-        fb_render();
-        vTaskDelay(pdMS_TO_TICKS(35));
-    }
-}
-
-// Hiệu ứng 5: Bầu trời sao lấp lánh (Twinkling Stars)
-static void effect_twinkling_stars(int duration_ms) {
-    ESP_LOGI(TAG, ">>> HIEU UNG 5: BAU TROI SAO LAP LANH (TWINKLING STARS)");
-    fb_clear();
-    int steps = duration_ms / 35;
-    for (int step = 0; step < steps; step++) {
-        for (int ic = 0; ic < NUM_ICS; ic++) {
-            for (int i = 0; i < BYTES_PER_IC; i++) {
-                if (fb[ic][i] > 12) fb[ic][i] -= 12;
-                else fb[ic][i] = 0;
-            }
-        }
-        for (int k = 0; k < 3; k++) {
-            uint8_t ic = rand() % NUM_ICS;
-            uint8_t r = rand() % NUM_ROWS;
-            uint8_t c = rand() % NUM_COLS;
-            fb_set_pixel(ic, r, c, 180 + rand() % 75);
-        }
-        fb_render();
-        vTaskDelay(pdMS_TO_TICKS(35));
-    }
-}
-
-// Hiệu ứng 6: Bàn cờ caro đan xen (Checkerboard)
+// Hiệu ứng bàn cờ caro đảo pha (Checkerboard Alternating)
 static void effect_checkerboard(int duration_ms) {
-    ESP_LOGI(TAG, ">>> HIEU UNG 6: BAN CO CARO DAO PHA (CHECKERBOARD)");
+    ESP_LOGI(TAG, ">>> HIEU UNG: BAN CO CARO DAO PHA");
     int steps = duration_ms / 250;
     for (int step = 0; step < steps; step++) {
         fb_clear();
         uint8_t phase = step % 2;
         for (uint8_t ic = 0; ic < NUM_ICS; ic++) {
-            for (uint8_t r = 0; r < NUM_ROWS; r++) {
-                for (uint8_t c = 0; c < NUM_COLS; c++) {
-                    if ((r + c + ic + phase) % 2 == 0) {
-                        fb_set_pixel(ic, r, c, 0xFF);
+            for (uint8_t r = 0; r < NUM_ROWS_PER_IC; r++) {
+                uint8_t col_pattern = 0;
+                for (int bit = 0; bit < 8; bit++) {
+                    if ((r + bit + ic + phase) % 2 == 0) {
+                        col_pattern |= (1 << bit);
                     }
                 }
+                fb[ic][r] = col_pattern;
             }
         }
         fb_render();
@@ -471,76 +622,57 @@ static void effect_checkerboard(int duration_ms) {
     }
 }
 
-// ============================================================================
-// CHƯƠNG TRÌNH TEST HIỂN THỊ CHỮ SỐ & CHỮ CÁI TO RÕ RÀNG
-// ============================================================================
-
-// 1. Đếm các số to từ 1 đến 9 trên cả 4 IC
-static void test_digits_1_to_9_big(void) {
-    ESP_LOGI(TAG, "=== HIEN THI CAC SO TU 1 DEN 9 (TO RO RANG TREN 4 IC) ===");
-    for (char c = '1'; c <= '9'; c++) {
-        ESP_LOGI(TAG, "-> So to: %c", c);
-        char buf[5] = {c, c, c, c, '\0'};
-        display_text_4chars(buf);
-        vTaskDelay(pdMS_TO_TICKS(1200));
-    }
-}
-
-// 2. Hiển thị nhóm 4 số và 4 chữ cái (Mỗi IC hiển thị 1 ký tự to)
-static void test_groups_4chars(void) {
-    ESP_LOGI(TAG, "=== HIEN THI NHOM 4 SO VA CHU CAI TO ===");
-    const char *groups[] = {
-        "1234", "5678", "9012",
-        "ABCD", "EFGH", "IJKL",
-        "MNOP", "QRST", "UVWX", "YZ--"
-    };
-    int n = sizeof(groups) / sizeof(groups[0]);
-    for (int i = 0; i < n; i++) {
-        ESP_LOGI(TAG, "-> Nhom ky tu to: %s", groups[i]);
-        display_text_4chars(groups[i]);
-        vTaskDelay(pdMS_TO_TICKS(1800));
-    }
-}
-
-// 3. Hiển thị từng chữ cái to từ A đến Z trên cả 4 IC
-static void test_letters_A_to_Z(void) {
-    ESP_LOGI(TAG, "=== HIEN THI CAC CHU CAI TU A DEN Z (TO RO RANG) ===");
-    for (char c = 'A'; c <= 'Z'; c++) {
-        ESP_LOGI(TAG, "-> Chu cai: %c", c);
-        char buf[5] = {c, c, c, c, '\0'};
-        display_text_4chars(buf);
-        vTaskDelay(pdMS_TO_TICKS(800));
-    }
-}
-
-// Task chạy thử nghiệm kiểm tra mạch LED với các hiệu ứng và chữ số to
+// Task chạy toàn bộ chương trình thử nghiệm
 static void led_test_task(void *pvParameters) {
-    ESP_LOGI(TAG, "=== BAT DAU TEST MA TRAN LED: SO 1-9 & CHU CAI TO RO RANG ===");
+    ESP_LOGI(TAG, "=== KHOI TAO PHAN CUNG 4x HT16D35A (BINARY MODE) ===");
 
     for (int i = 0; i < NUM_ICS; i++) {
         init_ht16d35a(i);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
-    set_global_brightness(63);
+    set_global_brightness(63); // Độ sáng cực đại
 
     while (1) {
-        test_digits_1_to_9_big();      // 1. Đếm số to 1 -> 9 trên màn hình
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // 0. Chẩn đoán vị trí & quét vạch sáng xác định chiều
+        diagnostic_sweep();
+        vTaskDelay(pdMS_TO_TICKS(500));
 
-        test_groups_4chars();          // 2. Nhóm 4 số & chữ cái: 1234, 5678, ABCD, EFGH...
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // 1. Đếm các số to từ 1 đến 9 (Phóng to 2x nét đôi cực rõ ràng)
+        test_digits_1_to_9_big(false);
+        vTaskDelay(pdMS_TO_TICKS(800));
 
-        test_letters_A_to_Z();         // 3. Từng chữ cái to A -> Z
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // 2. Đếm các số cực to 3x (Chiếm trọn bề ngang IC)
+        test_digits_1_to_9_huge(false);
+        vTaskDelay(pdMS_TO_TICKS(800));
 
-        effect_wave_scan(4000);        // Đan xen hiệu ứng sóng ánh sáng 4s
-        effect_matrix_rain(4000);      // Đan xen hiệu ứng mưa rơi 4s
+        // 3. Hiển thị từng nhóm 4 số và chữ cái (1234, 5678, ABCD, EFGH...)
+        test_groups_4chars(false);
+        vTaskDelay(pdMS_TO_TICKS(800));
+
+        // 4. Hiển thị chữ cái to A -> Z
+        test_letters_A_to_Z(false);
+        vTaskDelay(pdMS_TO_TICKS(800));
+
+        // 5. Cuộn chữ Marquee mượt mà qua cả 112 cột
+        scroll_text_H("1 2 3 4 5 6 7 8 9 - A B C D E F G H I J K L M N O P Q R S T U V W X Y Z ", 35, false);
+        vTaskDelay(pdMS_TO_TICKS(800));
+
+        // 6. Thử nghiệm chế độ xoay dọc (dành cho màn hình đặt đứng)
+        test_vertical_mode();
+        vTaskDelay(pdMS_TO_TICKS(800));
+
+        // 7. Các hiệu ứng hình ảnh
+        effect_wave_scan(3500);
+        effect_checkerboard(3000);
+        vTaskDelay(pdMS_TO_TICKS(800));
     }
 }
 
 extern "C" void app_main(void) {
-    ESP_LOGI(TAG, "Khoi dong he thong ESP32-C3 HT16D35A LED Driver");
+    ESP_LOGI(TAG, "==================================================");
+    ESP_LOGI(TAG, "KHOI DONG ESP32-C3 DIEU KHIEN 4x HT16D35A LED BAR");
+    ESP_LOGI(TAG, "==================================================");
     init_gpio();
     xTaskCreate(led_test_task, "led_test_task", 4096, NULL, 5, NULL);
 }
