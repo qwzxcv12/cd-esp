@@ -3,20 +3,12 @@
  * FIRMWARE TỰ ĐỘNG NHẬN DIỆN & HIỂN THỊ MA TRẬN LED 16x16 (ESP32-C3)
  * 4x HOLTEK HT16D35A + IC MỞ RỘNG PI4IOE5V6416 (TQFN-24)
  * ============================================================================
- * TÍNH NĂNG ĐẶC BIỆT:
- * 1. Chớp đèn LED bo mạch (GPIO 8) để báo hiệu chip ESP32-C3 đang chạy 100%.
- * 2. Tự động nhận diện cả 2 chiều chân I2C:
- *    - Chiều A: SDA = GPIO 20, SCL = GPIO 21
- *    - Chiều B: SDA = GPIO 21, SCL = GPIO 20 (chống cắm nhầm)
- * 3. Quét toàn bộ dải địa chỉ I2C (0x08 - 0x77) ở tần số 50 kHz siêu ổn định.
- * 4. Đẩy log trực tiếp bằng esp_rom_printf + fflush ra cổng USB-Serial-JTAG.
- * 5. Khi nhận diện được chip mở rộng -> Khởi động ngay 4 chip HT16D35A & chạy 6 hiệu ứng.
- * ============================================================================
  */
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
@@ -32,20 +24,17 @@
 #define PIN_LED_BOARD   GPIO_NUM_8
 
 #define I2C_PORT_NUM    I2C_NUM_0
-#define I2C_FREQ_HZ     50000        // 50 kHz tốc độ an toàn tối đa, chống nhiễu đường dài
+#define I2C_FREQ_HZ     50000        // 50 kHz chống nhiễu tối đa
 
 #define NUM_ICS         4
 #define NUM_ROWS_PER_IC 28
 
-// Ánh xạ bit chọn chip CS trên Port 0 của PI4IOE5V6416:
 // CS1 -> Bit 3, CS2 -> Bit 2, CS3 -> Bit 1, CS4 -> Bit 0
 static const uint8_t CS_BITS[NUM_ICS] = {3, 2, 1, 0};
 
 static uint8_t s_i2c_addr = 0x20;
 static bool s_i2c_ready = false;
-static uint8_t s_port0_state = 0xFF; // Mặc định tất cả CS đều ở mức HIGH (1)
-static gpio_num_t s_active_sda = GPIO_NUM_20;
-static gpio_num_t s_active_scl = GPIO_NUM_21;
+static uint8_t s_port0_state = 0xFF;
 
 static uint8_t fb[NUM_ICS][NUM_ROWS_PER_IC];
 
@@ -53,17 +42,15 @@ static inline void delay_us(uint32_t us) {
     esp_rom_delay_us(us);
 }
 
-// In log trực tiếp ra cổng USB FIFO không bị đệm
+// In log trực tiếp qua ROM FIFO, tuyệt đối KHÔNG chặn luồng
 #define LOG_DIRECT(fmt, ...) do { \
     esp_rom_printf(fmt, ##__VA_ARGS__); \
-    printf(fmt, ##__VA_ARGS__); \
-    fflush(stdout); \
 } while(0)
 
 static esp_err_t i2c_write_byte(uint8_t reg, uint8_t val) {
     if (!s_i2c_ready) return ESP_FAIL;
     uint8_t buf[2] = {reg, val};
-    return i2c_master_write_to_device(I2C_PORT_NUM, s_i2c_addr, buf, 2, pdMS_TO_TICKS(20));
+    return i2c_master_write_to_device(I2C_PORT_NUM, s_i2c_addr, buf, 2, pdMS_TO_TICKS(15));
 }
 
 static inline void cs_select(uint8_t ic_idx) {
@@ -162,20 +149,17 @@ static void init_ht16d35a(uint8_t ic_idx) {
     LOG_DIRECT("[HT16D35A] IC %d (CS%d) khoi tao OK!\r\n", ic_idx + 1, ic_idx + 1);
 }
 
-// Kiểm tra ACK thiết bị I2C
 static bool probe_i2c_addr(uint8_t addr) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
     i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(I2C_PORT_NUM, cmd, pdMS_TO_TICKS(40));
+    esp_err_t ret = i2c_master_cmd_begin(I2C_PORT_NUM, cmd, pdMS_TO_TICKS(20));
     i2c_cmd_link_delete(cmd);
     return (ret == ESP_OK);
 }
 
-// Thử cấu hình I2C trên 1 cặp chân và quét thiết bị
 static bool try_i2c_pair(gpio_num_t sda, gpio_num_t scl) {
-    // Nếu driver đã cài, gỡ ra trước
     i2c_driver_delete(I2C_PORT_NUM);
     vTaskDelay(pdMS_TO_TICKS(10));
 
@@ -190,32 +174,28 @@ static bool try_i2c_pair(gpio_num_t sda, gpio_num_t scl) {
     if (i2c_param_config(I2C_PORT_NUM, &conf) != ESP_OK) return false;
     if (i2c_driver_install(I2C_PORT_NUM, conf.mode, 0, 0, 0) != ESP_OK) return false;
 
-    // Kiểm tra nhanh 0x20 hoặc 0x21
+    // Thử 0x20
     if (probe_i2c_addr(0x20)) {
         s_i2c_addr = 0x20;
-        s_active_sda = sda;
-        s_active_scl = scl;
         s_i2c_ready = true;
-        LOG_DIRECT("[I2C] >>> TIM THAY PI4IOE5V6416 TAI 0x20 (SDA=GPIO%d, SCL=GPIO%d) <<<\r\n", sda, scl);
+        LOG_DIRECT("[I2C] >>> TIM THAY PI4IOE5V6416 TAI 0x20 (SDA=%d, SCL=%d) <<<\r\n", sda, scl);
         return true;
     }
+    // Thử 0x21
     if (probe_i2c_addr(0x21)) {
         s_i2c_addr = 0x21;
-        s_active_sda = sda;
-        s_active_scl = scl;
         s_i2c_ready = true;
-        LOG_DIRECT("[I2C] >>> TIM THAY PI4IOE5V6416 TAI 0x21 (SDA=GPIO%d, SCL=GPIO%d) <<<\r\n", sda, scl);
+        LOG_DIRECT("[I2C] >>> TIM THAY PI4IOE5V6416 TAI 0x21 (SDA=%d, SCL=%d) <<<\r\n", sda, scl);
         return true;
     }
 
-    // Quét toàn dải 0x08..0x77
-    for (uint8_t a = 0x08; a < 0x78; a++) {
+    // Thử quét các địa chỉ khác
+    for (uint8_t a = 0x10; a < 0x78; a++) {
+        if (a == 0x20 || a == 0x21) continue;
         if (probe_i2c_addr(a)) {
             s_i2c_addr = a;
-            s_active_sda = sda;
-            s_active_scl = scl;
             s_i2c_ready = true;
-            LOG_DIRECT("[I2C] >>> PHAT HIEN THIET BI I2C TAI 0x%02X (SDA=GPIO%d, SCL=GPIO%d) <<<\r\n", a, sda, scl);
+            LOG_DIRECT("[I2C] >>> PHAT HIEN THIET BI TAI 0x%02X (SDA=%d, SCL=%d) <<<\r\n", a, sda, scl);
             return true;
         }
     }
@@ -224,33 +204,24 @@ static bool try_i2c_pair(gpio_num_t sda, gpio_num_t scl) {
 }
 
 static void scan_and_init_i2c(void) {
-    LOG_DIRECT("[I2C] Dang do tim chip PI4IOE5V6416 tren ca 2 chieu chan...\r\n");
-
-    // Chiều 1: SDA = GPIO 20, SCL = GPIO 21
-    LOG_DIRECT("  [Thu chieu 1] SDA=GPIO 20, SCL=GPIO 21...\r\n");
+    // Chiều 1: SDA=20, SCL=21
     if (try_i2c_pair(GPIO_NUM_20, GPIO_NUM_21)) goto init_chip;
-
-    // Chiều 2: SDA = GPIO 21, SCL = GPIO 20 (đảo chiều phòng trường hợp cắm nhầm)
-    LOG_DIRECT("  [Thu chieu 2] SDA=GPIO 21, SCL=GPIO 20...\r\n");
+    // Chiều 2: SDA=21, SCL=20
     if (try_i2c_pair(GPIO_NUM_21, GPIO_NUM_20)) goto init_chip;
-
-    // Chiều 3: Thử chân dự phòng SDA=GPIO 4, SCL=GPIO 5
-    LOG_DIRECT("  [Thu chieu 3] SDA=GPIO 4, SCL=GPIO 5...\r\n");
+    // Chiều 3: SDA=4, SCL=5
     if (try_i2c_pair(GPIO_NUM_4, GPIO_NUM_5)) goto init_chip;
 
-    LOG_DIRECT("[I2C] CHUA THAY PHAN HOI TU CHIP PI4IOE5V6416!\r\n");
-    LOG_DIRECT("[I2C] Kiem tra: 1. Nguon 3.3V chan 21,23. 2. Chan 24 (RESET) da noi 3.3V chua?\r\n");
+    LOG_DIRECT("[I2C] Chua thay PI4IOE5V6416 phan hoi. Kiem tra nguon 3.3V va chan 24 RESET.\r\n");
     return;
 
 init_chip:
-    // Cấu hình các thanh ghi cho PI4IOE5V6416
-    s_port0_state = 0xFF; // Mặc định tất cả chân CS mức HIGH (1)
+    s_port0_state = 0xFF;
     i2c_write_byte(0x02, s_port0_state); // Output Port 0 = 0xFF
     i2c_write_byte(0x03, 0xFF);         // Output Port 1 = 0xFF
     i2c_write_byte(0x06, 0x00);         // Config Port 0: OUTPUT
     i2c_write_byte(0x07, 0x00);         // Config Port 1: OUTPUT
-    i2c_write_byte(0x4F, 0x00);         // Push-Pull output
-    LOG_DIRECT("[I2C] Da cau hinh Port 0 lam ngo ra CS1..CS4 thanh cong!\r\n");
+    i2c_write_byte(0x4F, 0x00);         // Push-Pull
+    LOG_DIRECT("[I2C] Cau hinh PI4IOE5V6416 Port 0 thanh cong!\r\n");
 }
 
 // ============================================================================
@@ -276,6 +247,16 @@ static void draw_pixel(int x, int y, bool r, bool g, bool b) {
     if (b) fb[ic][addr_B] |= mask; else fb[ic][addr_B] &= ~mask;
 }
 
+static const uint16_t HEART_BIG[16] = {
+    0x0000, 0x0E70, 0x3FFC, 0x7FFE, 0x7FFE, 0x7FFE, 0x3FFC, 0x3FFC,
+    0x1FF8, 0x0FF0, 0x07E0, 0x03C0, 0x0180, 0x0000, 0x0000, 0x0000
+};
+
+static const uint16_t HEART_SMALL[16] = {
+    0x0000, 0x0000, 0x0660, 0x0FF0, 0x0FF0, 0x0FF0, 0x07E0, 0x07E0,
+    0x03C0, 0x0180, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+
 static void draw_bitmap(const uint16_t bmp[16], bool r, bool g, bool b) {
     for (int y = 0; y < 16; y++) {
         uint16_t bits = bmp[y];
@@ -286,17 +267,6 @@ static void draw_bitmap(const uint16_t bmp[16], bool r, bool g, bool b) {
         }
     }
 }
-
-// 1. TRÁI TIM ĐẬP
-static const uint16_t HEART_BIG[16] = {
-    0x0000, 0x0E70, 0x3FFC, 0x7FFE, 0x7FFE, 0x7FFE, 0x3FFC, 0x3FFC,
-    0x1FF8, 0x0FF0, 0x07E0, 0x03C0, 0x0180, 0x0000, 0x0000, 0x0000
-};
-
-static const uint16_t HEART_SMALL[16] = {
-    0x0000, 0x0000, 0x0660, 0x0FF0, 0x0FF0, 0x0FF0, 0x07E0, 0x07E0,
-    0x03C0, 0x0180, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
-};
 
 static void anim_beating_heart(int duration_ms) {
     int elapsed = 0;
@@ -330,87 +300,23 @@ static void anim_beating_heart(int duration_ms) {
     }
 }
 
-// 2. MẶT CƯỜI NHÁY MẮT
-static const uint16_t SMILEY_OPEN[16] = {
-    0x07E0, 0x1FF8, 0x3FFC, 0x73CE, 0x73CE, 0xFFFF, 0xFFFF, 0xFFFF,
-    0xE007, 0xF00F, 0x7C3E, 0x7FFE, 0x3FFC, 0x1FF8, 0x07E0, 0x0000
-};
-
-static const uint16_t SMILEY_WINK[16] = {
-    0x07E0, 0x1FF8, 0x3FFC, 0x73FE, 0x7386, 0xFFFF, 0xFFFF, 0xFFFF,
-    0xE007, 0xF00F, 0x7C3E, 0x7FFE, 0x3FFC, 0x1FF8, 0x07E0, 0x0000
-};
-
-static void anim_winking_smiley(int duration_ms) {
-    int elapsed = 0;
-    while (elapsed < duration_ms) {
-        fb_clear();
-        draw_bitmap(SMILEY_OPEN, true, true, false);
-        fb_render();
-        vTaskDelay(pdMS_TO_TICKS(900));
-
-        fb_clear();
-        draw_bitmap(SMILEY_WINK, true, true, false);
-        fb_render();
-        vTaskDelay(pdMS_TO_TICKS(250));
-
-        elapsed += 1150;
-    }
-}
-
-// 3. PAC-MAN HÁ MỒM ĂN KẸO
-static const uint16_t PACMAN_OPEN_RIGHT[16] = {
-    0x03C0, 0x0FF0, 0x1FF8, 0x3FFC, 0x7FE0, 0x7F80, 0x7E00, 0x7C00,
-    0x7C00, 0x7E00, 0x7F80, 0x7FE0, 0x3FFC, 0x1FF8, 0x0FF0, 0x03C0
-};
-
-static const uint16_t PACMAN_CLOSED[16] = {
-    0x03C0, 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE,
-    0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE, 0x3FFC, 0x1FF8, 0x0FF0, 0x03C0
-};
-
-static void anim_pacman(int duration_ms) {
-    int elapsed = 0;
-    int step = 0;
-    while (elapsed < duration_ms) {
-        fb_clear();
-        if (step % 2 == 0) {
-            draw_bitmap(PACMAN_OPEN_RIGHT, true, true, false);
-        } else {
-            draw_bitmap(PACMAN_CLOSED, true, true, false);
-        }
-        draw_pixel(13, 7, false, true, true);
-        draw_pixel(14, 7, false, true, true);
-        draw_pixel(13, 8, false, true, true);
-        draw_pixel(14, 8, false, true, true);
-
-        fb_render();
-        vTaskDelay(pdMS_TO_TICKS(180));
-        elapsed += 180;
-        step++;
-    }
-}
-
-// TASK CHÍNH
+// TASK HIỂN THỊ
 static void display_task(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(500));
-
-    // Thử nhận diện I2C lần đầu
     scan_and_init_i2c();
 
     if (s_i2c_ready) {
-        LOG_DIRECT("=== BAT DAU KHOI TAO 4 CHIP HT16D35A ===\r\n");
+        LOG_DIRECT("=== KHOI TAO 4 CHIP HT16D35A ===\r\n");
         for (int i = 0; i < NUM_ICS; i++) {
             init_ht16d35a(i);
             vTaskDelay(pdMS_TO_TICKS(30));
         }
-        LOG_DIRECT("=== KHOI TAO 4 CHIP HT16D35A HOAN TAT! ===\r\n");
     }
 
     uint32_t count = 0;
     while (1) {
         if (!s_i2c_ready) {
-            LOG_DIRECT("[Trang thai] Dang scan tim chip PI4IOE5V6416 (Lan thu %lu)...\r\n", (unsigned long)count);
+            LOG_DIRECT("[Quet I2C lan %lu] Dang tim chip PI4IOE5V6416...\r\n", (unsigned long)count);
             scan_and_init_i2c();
             if (s_i2c_ready) {
                 for (int i = 0; i < NUM_ICS; i++) {
@@ -420,57 +326,46 @@ static void display_task(void *pvParameters) {
             }
             vTaskDelay(pdMS_TO_TICKS(2000));
         } else {
-            // Chạy tuần tự các hiệu ứng
-            anim_beating_heart(6000);
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
-
-            anim_winking_smiley(6000);
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
-
-            anim_pacman(6000);
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
+            anim_beating_heart(4000);
+            vTaskDelay(pdMS_TO_TICKS(200));
         }
-
         count++;
-        LOG_DIRECT("[Heartbeat] ESP32-C3 hoat dong tot. Chu ky: %lu\r\n", (unsigned long)count);
     }
 }
 
-// TASK NHẤP NHÁY ĐÈN LED BO MẠCH (GPIO 8)
+// TASK NHẤP NHÁY ĐÈN BO MẠCH (GPIO 8)
 static void blink_task(void *pvParameters) {
     gpio_reset_pin(PIN_LED_BOARD);
     gpio_set_direction(PIN_LED_BOARD, GPIO_MODE_OUTPUT);
 
     int level = 0;
     while (1) {
-        level = !level;
         gpio_set_level(PIN_LED_BOARD, level);
-        vTaskDelay(pdMS_TO_TICKS(250)); // Nhấp nháy 2 lần mỗi giây
+        level = !level;
+        vTaskDelay(pdMS_TO_TICKS(250)); // Nhấp nháy 2 lần/giây
     }
 }
 
 extern "C" void app_main(void) {
-    // 1. Chờ 1.5 giây để USB CDC kết nối trên Windows
-    vTaskDelay(pdMS_TO_TICKS(1500));
+    // Đặt stdout sang Non-Blocking để không bao giờ bị nghẽn
+    int flags = fcntl(fileno(stdout), F_GETFL, 0);
+    fcntl(fileno(stdout), F_SETFL, flags | O_NONBLOCK);
 
-    LOG_DIRECT("\r\n\r\n");
-    LOG_DIRECT("=====================================================================\r\n");
-    LOG_DIRECT("  FIRMWARE MA TRAN LED 16x16 FULL RGB (ESP32-C3 + PI4IOE5V6416)\r\n");
-    LOG_DIRECT("  CLK=GPIO 1 | DIO=GPIO 0 | LED Bo Mach=GPIO 8\r\n");
-    LOG_DIRECT("=====================================================================\r\n\r\n");
+    vTaskDelay(pdMS_TO_TICKS(1000));
 
-    // 2. Cấu hình chân SPI HT16D35A
+    LOG_DIRECT("\r\n\r\n=== FIRMWARE MA TRAN 16x16 DA KHOI DONG! ===\r\n");
+
+    // 1. Cấu hình chân SPI HT16D35A
     gpio_reset_pin(PIN_CLK);
     gpio_reset_pin(PIN_DIO);
     gpio_set_direction(PIN_CLK, GPIO_MODE_OUTPUT);
     gpio_set_direction(PIN_DIO, GPIO_MODE_OUTPUT);
     gpio_set_level(PIN_CLK, 0);
     gpio_set_level(PIN_DIO, 0);
-    LOG_DIRECT("[GPIO] Khoi tao CLK=GPIO 1, DIO=GPIO 0 thanh cong.\r\n");
 
-    // 3. Khởi tạo task chớp LED bo mạch
+    // 2. Chạy task nhấp nháy đèn LED bo mạch (GPIO 8)
     xTaskCreate(blink_task, "blink_task", 2048, NULL, 3, NULL);
 
-    // 4. Khởi tạo task quét I2C & hiển thị hoạt hình
-    xTaskCreate(display_task, "display_task", 6144, NULL, 5, NULL);
+    // 3. Chạy task quét I2C & hiển thị
+    xTaskCreate(display_task, "display_task", 4096, NULL, 5, NULL);
 }
