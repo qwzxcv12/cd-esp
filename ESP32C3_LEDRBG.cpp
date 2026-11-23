@@ -1,77 +1,38 @@
 /**
  * ============================================================================
- * HIỂN THỊ CHỮ SỐ (0-9) VÀ CHỮ CÁI (A-Z) TO RÕ RÀNG TRỌN VẸN 16x16
- * ĐỔI MÀU FULL RGB TRÊN MA TRẬN 16x16 (4x HOLTEK HT16D35A)
+ * TRÌNH DIỄN ĐỒ HỌA HOẠT HÌNH PIXEL ART ĐỈNH CAO TRÊN MA TRẬN 16x16 FULL RGB
+ * (4x HOLTEK HT16D35A - ESP32-C3)
  * ============================================================================
- * SƠ ĐỒ ĐẤU NỐI ESP32-C3:
- * - CLK : GPIO 1  (chung 4 IC)
- * - DIO : GPIO 0  (chung 4 IC)
- * - CS1 : GPIO 20 (IC1: Cột 0..3)
- * - CS2 : GPIO 21 (IC2: Cột 4..7)
- * - CS3 : GPIO 9  (IC3: Cột 8..11)
- * - CS4 : GPIO 10 (IC4: Cột 12..15)
+ * 6 HIỆU ỨNG ĐỘNG RÕ NÉT, SINH ĐỘNG VÀ DỄ HIỂU NHẤT:
+ * 1. TRÁI TIM ĐẬP (BEATING HEART)
+ * 2. MẶT CƯỜI NHÁY MẮT (WINKING SMILEY)
+ * 3. PAC-MAN HÁ MỒM ĂN KẸO (PAC-MAN RETRO)
+ * 4. MÂY MƯA RƠI & SẤM CHỚP (RAIN & LIGHTNING)
+ * 5. CỘT SÓNG ÂM NHẠC (AUDIO EQUALIZER PEAK METER)
+ * 6. NGỌN LỬA BẬP BÙNG (DOOM FIRE EFFECT)
  * ============================================================================
  */
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
-// Font 16x16 to ro rang cho 0-9 va A-Z (Arial Bold)
-static const uint16_t FONT_16X16[36][16] = {
-    { 0x07C0, 0x0FE0, 0x0EE0, 0x1C70, 0x1C70, 0x1C70, 0x1C70, 0x1C70, 0x1C70, 0x1C70, 0x1C70, 0x1C70, 0x0EE0, 0x0FE0, 0x07C0, 0x0000 }, // [ 0] '0'
-    { 0x01C0, 0x01C0, 0x03C0, 0x0FC0, 0x1FC0, 0x1DC0, 0x11C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x0000 }, // [ 1] '1'
-    { 0x07C0, 0x0FE0, 0x1C70, 0x1C70, 0x0070, 0x0070, 0x00E0, 0x01E0, 0x03C0, 0x0380, 0x0700, 0x0F00, 0x0E00, 0x1FF0, 0x1FF0, 0x0000 }, // [ 2] '2'
-    { 0x07C0, 0x0FE0, 0x1C70, 0x1C70, 0x0070, 0x00F0, 0x03E0, 0x03E0, 0x00F0, 0x0070, 0x0070, 0x1C70, 0x1C70, 0x0FE0, 0x07C0, 0x0000 }, // [ 3] '3'
-    { 0x00E0, 0x01E0, 0x01E0, 0x03E0, 0x03E0, 0x06E0, 0x0CE0, 0x0CE0, 0x18E0, 0x30E0, 0x3FF8, 0x3FF8, 0x00E0, 0x00E0, 0x00E0, 0x0000 }, // [ 4] '4'
-    { 0x07E0, 0x07E0, 0x0E00, 0x0E00, 0x0E00, 0x0FC0, 0x1FE0, 0x1CF0, 0x0070, 0x0070, 0x0070, 0x1C70, 0x1EE0, 0x0FE0, 0x07C0, 0x0000 }, // [ 5] '5'
-    { 0x03C0, 0x0FE0, 0x0EF0, 0x1C60, 0x1C00, 0x1DC0, 0x1FE0, 0x1EF0, 0x1C70, 0x1C70, 0x1C70, 0x1C70, 0x0EE0, 0x0FE0, 0x0380, 0x0000 }, // [ 6] '6'
-    { 0x1FF0, 0x1FF0, 0x0070, 0x00E0, 0x01C0, 0x01C0, 0x0380, 0x0380, 0x0700, 0x0700, 0x0700, 0x0E00, 0x0E00, 0x0E00, 0x0E00, 0x0000 }, // [ 7] '7'
-    { 0x07C0, 0x0FE0, 0x1C70, 0x1C70, 0x1C70, 0x0EE0, 0x07C0, 0x07C0, 0x0EE0, 0x1C70, 0x1C70, 0x1C70, 0x1EF0, 0x0FE0, 0x07C0, 0x0000 }, // [ 8] '8'
-    { 0x0380, 0x0FE0, 0x0EE0, 0x1C70, 0x1C70, 0x1C70, 0x1C70, 0x1EF0, 0x0FF0, 0x0770, 0x0070, 0x0C70, 0x1EE0, 0x0FE0, 0x0780, 0x0000 }, // [ 9] '9'
-    { 0x0F80, 0x0F80, 0x0F80, 0x1DC0, 0x1DC0, 0x1DC0, 0x18E0, 0x38E0, 0x38E0, 0x3FE0, 0x7FF0, 0x7FF0, 0x7070, 0xE038, 0xE038, 0x0000 }, // [10] 'A'
-    { 0x3FE0, 0x3FF0, 0x3FF8, 0x3838, 0x3838, 0x3838, 0x3FF0, 0x3FF0, 0x3FF8, 0x381C, 0x381C, 0x381C, 0x3FFC, 0x3FF8, 0x3FF0, 0x0000 }, // [11] 'B'
-    { 0x03E0, 0x0FF8, 0x1FF8, 0x1E3C, 0x3C18, 0x3800, 0x3800, 0x3800, 0x3800, 0x3800, 0x3C18, 0x1C3C, 0x1FF8, 0x0FF8, 0x03E0, 0x0000 }, // [12] 'C'
-    { 0x3FE0, 0x3FF0, 0x3FF8, 0x3838, 0x383C, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x3838, 0x3FF8, 0x3FF0, 0x3FC0, 0x0000 }, // [13] 'D'
-    { 0x3FF8, 0x3FF8, 0x3FF8, 0x3800, 0x3800, 0x3800, 0x3FF0, 0x3FF0, 0x3FF0, 0x3800, 0x3800, 0x3800, 0x3FF8, 0x3FF8, 0x3FF8, 0x0000 }, // [14] 'E'
-    { 0x1FF8, 0x1FF8, 0x1FF8, 0x1C00, 0x1C00, 0x1C00, 0x1FF0, 0x1FF0, 0x1FF0, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x0000 }, // [15] 'F'
-    { 0x03E0, 0x0FF8, 0x1FFC, 0x3C1E, 0x780C, 0x7000, 0x7000, 0x70FE, 0x70FE, 0x70FE, 0x380E, 0x3C1E, 0x1FFE, 0x0FFC, 0x03E0, 0x0000 }, // [16] 'G'
-    { 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x3FFC, 0x3FFC, 0x3FFC, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x0000 }, // [17] 'H'
-    { 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0000 }, // [18] 'I'
-    { 0x0070, 0x0070, 0x0070, 0x0070, 0x0070, 0x0070, 0x0070, 0x0070, 0x0070, 0x3870, 0x3870, 0x3C70, 0x1FF0, 0x1FE0, 0x0780, 0x0000 }, // [19] 'J'
-    { 0x7078, 0x70F0, 0x71E0, 0x71C0, 0x7380, 0x7780, 0x7F80, 0x7FC0, 0x7DC0, 0x78E0, 0x70E0, 0x7070, 0x7070, 0x7038, 0x7038, 0x0000 }, // [20] 'K'
-    { 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1C00, 0x1FF8, 0x1FF8, 0x1FF8, 0x0000 }, // [21] 'L'
-    { 0x0000, 0x7C1F, 0x7C1F, 0x7E3F, 0x7637, 0x7637, 0x7637, 0x7777, 0x7367, 0x7367, 0x7367, 0x73E7, 0x71C7, 0x71C7, 0x71C7, 0x0000 }, // [22] 'M'
-    { 0x381C, 0x3C1C, 0x3E1C, 0x3E1C, 0x3F1C, 0x3B1C, 0x3B9C, 0x399C, 0x39DC, 0x38DC, 0x38FC, 0x387C, 0x387C, 0x383C, 0x381C, 0x0000 }, // [23] 'N'
-    { 0x07E0, 0x1FF8, 0x3FFC, 0x3C3C, 0x781E, 0x700E, 0x700E, 0x700E, 0x700E, 0x700E, 0x781E, 0x3C3C, 0x3FFC, 0x1FF8, 0x07E0, 0x0000 }, // [24] 'O'
-    { 0x3FE0, 0x3FF0, 0x3FF8, 0x3838, 0x3838, 0x3838, 0x3FF8, 0x3FF0, 0x3FE0, 0x3800, 0x3800, 0x3800, 0x3800, 0x3800, 0x3800, 0x0000 }, // [25] 'P'
-    { 0x07C0, 0x1FF0, 0x3FF8, 0x3C78, 0x783C, 0x701C, 0x701C, 0x701C, 0x709C, 0x79DC, 0x3CF8, 0x3FF8, 0x1FFC, 0x07DE, 0x0004, 0x0000 }, // [26] 'Q'
-    { 0x7FC0, 0x7FE0, 0x7FF0, 0x7070, 0x7070, 0x7070, 0x7FF0, 0x7FE0, 0x7F80, 0x73C0, 0x71E0, 0x70E0, 0x70F0, 0x7070, 0x7078, 0x0000 }, // [27] 'R'
-    { 0x07C0, 0x1FF0, 0x1FF0, 0x3C78, 0x3838, 0x3C00, 0x1F80, 0x0FF0, 0x03F0, 0x0078, 0x3838, 0x3C78, 0x1FF8, 0x1FF0, 0x07C0, 0x0000 }, // [28] 'S'
-    { 0x1FFC, 0x1FFC, 0x1FFC, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x01C0, 0x0000 }, // [29] 'T'
-    { 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x381C, 0x3C3C, 0x1FF8, 0x1FF8, 0x07E0, 0x0000 }, // [30] 'U'
-    { 0x701C, 0x701C, 0x3838, 0x3838, 0x3838, 0x1C70, 0x1C70, 0x1C70, 0x0EE0, 0x0EE0, 0x0EE0, 0x07C0, 0x07C0, 0x07C0, 0x0380, 0x0000 }, // [31] 'V'
-    { 0x0000, 0x0000, 0xC386, 0xE386, 0x638C, 0x66CC, 0x66CC, 0x36D8, 0x36D8, 0x36D8, 0x1C78, 0x1C70, 0x1C70, 0x1C70, 0x0000, 0x0000 }, // [32] 'W'
-    { 0x3838, 0x3838, 0x1C70, 0x0EE0, 0x0EE0, 0x07C0, 0x07C0, 0x0380, 0x07C0, 0x07C0, 0x0EE0, 0x0EE0, 0x1C70, 0x3838, 0x3838, 0x0000 }, // [33] 'X'
-    { 0x701C, 0x701C, 0x3838, 0x1C70, 0x1C70, 0x0EE0, 0x07C0, 0x07C0, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0380, 0x0000 }, // [34] 'Y'
-    { 0x1FF8, 0x1FF8, 0x1FF8, 0x0078, 0x00F0, 0x01E0, 0x01C0, 0x0380, 0x0700, 0x0F00, 0x1E00, 0x3C00, 0x3FF8, 0x3FF8, 0x3FF8, 0x0000 }, // [35] 'Z'
-};
 
-
-static const char *TAG = "MATRIX_16X16";
+static const char *TAG = "PIXEL_ANIMATION";
 
 // --- CHÂN GPIO ESP32-C3 ---
 #define PIN_CLK         GPIO_NUM_1
 #define PIN_DIO         GPIO_NUM_0
 
-#define PIN_CS1         GPIO_NUM_20  // IC 1
-#define PIN_CS2         GPIO_NUM_21  // IC 2
-#define PIN_CS3         GPIO_NUM_9   // IC 3
-#define PIN_CS4         GPIO_NUM_10  // IC 4
+#define PIN_CS1         GPIO_NUM_20  // IC 1: Cột 0..3
+#define PIN_CS2         GPIO_NUM_21  // IC 2: Cột 4..7
+#define PIN_CS3         GPIO_NUM_9   // IC 3: Cột 8..11
+#define PIN_CS4         GPIO_NUM_10  // IC 4: Cột 12..15
 
 #define NUM_ICS         4
 static const gpio_num_t CS_PINS[NUM_ICS] = {PIN_CS1, PIN_CS2, PIN_CS3, PIN_CS4};
@@ -170,7 +131,7 @@ static void init_ht16d35a(uint8_t ic_idx) {
     delay_us(4); gpio_set_level(CS_PINS[ic_idx], 1); delay_us(4);
 
     send_cmd_2b(ic_idx, CMD_SYSTEM_CTRL, 0x03);
-    ESP_LOGI(TAG, "IC %d (CS GPIO %d) khoi tao OK", ic_idx + 1, CS_PINS[ic_idx]);
+    ESP_LOGI(TAG, "IC %d init OK", ic_idx + 1);
 }
 
 static void init_gpio(void) {
@@ -189,21 +150,15 @@ static void init_gpio(void) {
 }
 
 // ============================================================================
-// HỆ THỐNG ĐỒ HỌA MA TRẬN 16x16
+// HỆ THỐNG ĐỒ HỌA MA TRẬN 16x16 CHUẨN XÁC 100%
 // ============================================================================
 
-/**
- * Đặt màu cho 1 pixel theo tọa độ ma trận 16x16:
- * @param x: Cột 0..15 (0 bên trái, 15 bên phải)
- * @param y: Hàng 0..15 (0 ở đỉnh trên cùng, 15 ở đáy dưới cùng)
- * @param r, g, b: Bật/tắt các màu Đỏ, Xanh lá, Xanh dương
- */
 static void draw_pixel(int x, int y, bool r, bool g, bool b) {
     if (x < 0 || x >= 16 || y < 0 || y >= 16) return;
 
     uint8_t ic = x / 4;
     uint8_t col = x % 4;
-    uint8_t row = 15 - y; // Đỉnh là y=0 (row 15), Đáy là y=15 (row 0)
+    uint8_t row = 15 - y; // y=0 đỉnh trên cùng, y=15 đáy dưới cùng
 
     uint8_t t = row % 8;
     uint8_t addr_R = t * 3 + 0;
@@ -218,64 +173,338 @@ static void draw_pixel(int x, int y, bool r, bool g, bool b) {
     if (b) fb[ic][addr_B] |= mask; else fb[ic][addr_B] &= ~mask;
 }
 
-// Bảng màu RGB rực rỡ
-typedef struct {
-    bool r;
-    bool g;
-    bool b;
-    const char *name;
-} ColorRGB;
-
-static const ColorRGB PALETTE[] = {
-    {true,  false, false, "DO (RED)"},
-    {false, true,  false, "XANH LA (GREEN)"},
-    {false, false, true,  "XANH DUONG (BLUE)"},
-    {true,  true,  false, "VANG (YELLOW)"},
-    {false, true,  true,  "CYAN (XANH LO)"},
-    {true,  false, true,  "MAGENTA (TIM)"},
-    {true,  true,  true,  "TRANG (WHITE)"},
+// ============================================================================
+// HIỆU ỨNG 1: TRÁI TIM ĐẬP (BEATING HEART)
+// ============================================================================
+static const uint16_t HEART_BIG[16] = {
+    0x0000, 0x0E70, 0x3FFC, 0x7FFE, 0x7FFE, 0x7FFE, 0x3FFC, 0x3FFC,
+    0x1FF8, 0x0FF0, 0x07E0, 0x03C0, 0x0180, 0x0000, 0x0000, 0x0000
 };
-#define NUM_COLORS (sizeof(PALETTE) / sizeof(PALETTE[0]))
 
-/**
- * Hiển thị 1 glyph 16x16 với màu RGB chỉ định
- */
-static void show_glyph(const uint16_t glyph[16], ColorRGB color) {
-    fb_clear();
+static const uint16_t HEART_SMALL[16] = {
+    0x0000, 0x0000, 0x0660, 0x0FF0, 0x0FF0, 0x0FF0, 0x07E0, 0x07E0,
+    0x03C0, 0x0180, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+
+static void draw_bitmap(const uint16_t bmp[16], bool r, bool g, bool b) {
     for (int y = 0; y < 16; y++) {
-        uint16_t row_bits = glyph[y];
+        uint16_t bits = bmp[y];
         for (int x = 0; x < 16; x++) {
-            if (row_bits & (1 << (15 - x))) {
-                draw_pixel(x, y, color.r, color.g, color.b);
+            if (bits & (1 << (15 - x))) {
+                draw_pixel(x, y, r, g, b);
             }
         }
     }
-    fb_render();
 }
 
-/**
- * Hiển thị 1 ký tự ('0'..'9' hoặc 'A'..'Z')
- */
-static void show_char(char c, ColorRGB color) {
-    int idx = -1;
-    if (c >= '0' && c <= '9') {
-        idx = c - '0';
-    } else if (c >= 'A' && c <= 'Z') {
-        idx = 10 + (c - 'A');
-    } else if (c >= 'a' && c <= 'z') {
-        idx = 10 + (c - 'a');
+static void anim_beating_heart(int duration_ms) {
+    ESP_LOGI(TAG, ">>> HIEU UNG 1: TRAI TIM DAP (BEATING HEART) <<<");
+    int elapsed = 0;
+    while (elapsed < duration_ms) {
+        // Nhịp 1: Trái tim lớn đỏ rực + điểm bóng sáng trắng
+        fb_clear();
+        draw_bitmap(HEART_BIG, true, false, false);
+        draw_pixel(4, 3, true, true, true); // Điểm bóng sáng
+        draw_pixel(4, 4, true, true, true);
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(180));
+
+        // Nhịp 2: Trái tim nhỏ
+        fb_clear();
+        draw_bitmap(HEART_SMALL, true, false, false);
+        draw_pixel(6, 4, true, true, true);
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(140));
+
+        // Nhịp 3: Trái tim lớn lại
+        fb_clear();
+        draw_bitmap(HEART_BIG, true, false, false);
+        draw_pixel(4, 3, true, true, true);
+        draw_pixel(4, 4, true, true, true);
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(200));
+
+        // Nghỉ giữa 2 nhịp tim
+        fb_clear();
+        draw_bitmap(HEART_SMALL, true, false, false);
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(450));
+
+        elapsed += (180 + 140 + 200 + 450);
+    }
+}
+
+// ============================================================================
+// HIỆU ỨNG 2: MẶT CƯỜI NHÁY MẮT (WINKING SMILEY)
+// ============================================================================
+static const uint16_t SMILEY_OPEN[16] = {
+    0x07E0, 0x1FF8, 0x3FFC, 0x73CE, 0x73CE, 0xFFFF, 0xFFFF, 0xFFFF,
+    0xE007, 0xF00F, 0x7C3E, 0x7FFE, 0x3FFC, 0x1FF8, 0x07E0, 0x0000
+};
+
+static const uint16_t SMILEY_WINK[16] = {
+    0x07E0, 0x1FF8, 0x3FFC, 0x73FE, 0x7386, 0xFFFF, 0xFFFF, 0xFFFF,
+    0xE007, 0xF00F, 0x7C3E, 0x7FFE, 0x3FFC, 0x1FF8, 0x07E0, 0x0000
+};
+
+static void anim_winking_smiley(int duration_ms) {
+    ESP_LOGI(TAG, ">>> HIEU UNG 2: MAT CUOI NHAY MAT (WINKING SMILEY) <<<");
+    int elapsed = 0;
+    while (elapsed < duration_ms) {
+        // Mắt mở tươi cười (Màu Vàng)
+        fb_clear();
+        draw_bitmap(SMILEY_OPEN, true, true, false);
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(1200));
+
+        // Nháy mắt
+        fb_clear();
+        draw_bitmap(SMILEY_WINK, true, true, false);
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(350));
+
+        // Mở lại
+        fb_clear();
+        draw_bitmap(SMILEY_OPEN, true, true, false);
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(800));
+
+        elapsed += (1200 + 350 + 800);
+    }
+}
+
+// ============================================================================
+// HIỆU ỨNG 3: PAC-MAN HÁ MỒM ĐUỔI HẠT NĂNG LƯỢNG
+// ============================================================================
+static const uint16_t PACMAN_FRAME[3][16] = {
+    // Frame 0: Mồm mở to
+    { 0x07E0, 0x1FF8, 0x3FFC, 0x7F80, 0x7F00, 0xFE00, 0xFC00, 0xFC00,
+      0xFE00, 0x7F00, 0x7F80, 0x3FFC, 0x1FF8, 0x07E0, 0x0000, 0x0000 },
+    // Frame 1: Mồm mở vừa
+    { 0x07E0, 0x1FF8, 0x3FFC, 0x7FE0, 0x7FC0, 0xFF80, 0xFF00, 0xFF00,
+      0xFF80, 0x7FC0, 0x7FE0, 0x3FFC, 0x1FF8, 0x07E0, 0x0000, 0x0000 },
+    // Frame 2: Mồm ngậm tròn
+    { 0x07E0, 0x1FF8, 0x3FFC, 0x7FFE, 0x7FFE, 0xFFFF, 0xFFFF, 0xFFFF,
+      0xFFFF, 0x7FFE, 0x7FFE, 0x3FFC, 0x1FF8, 0x07E0, 0x0000, 0x0000 }
+};
+
+static void anim_pacman(int duration_ms) {
+    ESP_LOGI(TAG, ">>> HIEU UNG 3: PAC-MAN HA MOM AN KEO <<<");
+    int elapsed = 0;
+    int f = 0;
+    bool dot_blink = true;
+
+    while (elapsed < duration_ms) {
+        fb_clear();
+        // Vẽ Pac-man màu vàng
+        draw_bitmap(PACMAN_FRAME[f % 3], true, true, false);
+
+        // Vẽ 2 hạt kẹo chấm trắng nhấp nháy ở phía trước
+        if (dot_blink) {
+            draw_pixel(13, 6, true, true, true);
+            draw_pixel(13, 7, true, true, true);
+            draw_pixel(15, 6, true, true, true);
+            draw_pixel(15, 7, true, true, true);
+        }
+
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(140));
+        f++;
+        if (f % 2 == 0) dot_blink = !dot_blink;
+        elapsed += 140;
+    }
+}
+
+// ============================================================================
+// HIỆU ỨNG 4: MÂY MƯA RƠI & SẤM CHỚP (RAIN & LIGHTNING)
+// ============================================================================
+static const uint16_t CLOUD_BMP[16] = {
+    0x0000, 0x0380, 0x0FE0, 0x1FF8, 0x7FFE, 0xFFFF, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+
+typedef struct {
+    int x;
+    int y;
+    int speed;
+} RainDrop;
+
+static void anim_rain_and_thunder(int duration_ms) {
+    ESP_LOGI(TAG, ">>> HIEU UNG 4: MAY MUA & SAM CHOP <<<");
+    RainDrop drops[8];
+    for (int i = 0; i < 8; i++) {
+        drops[i].x = (i * 2) + (rand() % 2);
+        drops[i].y = 6 + (rand() % 8);
+        drops[i].speed = 1 + (rand() % 2);
     }
 
-    if (idx >= 0 && idx < 36) {
-        show_glyph(FONT_16X16[idx], color);
+    int elapsed = 0;
+    int lightning_timer = 0;
+
+    while (elapsed < duration_ms) {
+        fb_clear();
+
+        // 1. Vẽ đám mây màu Xanh Cyan / Trắng
+        draw_bitmap(CLOUD_BMP, false, true, true);
+
+        // 2. Cập nhật và vẽ hạt mưa rơi màu Xanh Dương
+        for (int i = 0; i < 8; i++) {
+            drops[i].y += drops[i].speed;
+            if (drops[i].y >= 16) {
+                drops[i].y = 6;
+                drops[i].x = (i * 2) + (rand() % 2);
+            }
+            draw_pixel(drops[i].x, drops[i].y, false, false, true);
+            // Vệt mưa kéo dài 1 pixel
+            if (drops[i].y > 6) {
+                draw_pixel(drops[i].x, drops[i].y - 1, false, false, true);
+            }
+        }
+
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(80));
+        elapsed += 80;
+        lightning_timer++;
+
+        // 3. Sấm sét chớp sáng sau mỗi khoảng 2-3 giây
+        if (lightning_timer > 30) {
+            lightning_timer = 0;
+            // Chớp giật tia sét Trắng/Vàng
+            for (int flash = 0; flash < 2; flash++) {
+                fb_clear();
+                // Vẽ tia sét Zigzag màu Vàng
+                draw_pixel(8, 5, true, true, false);
+                draw_pixel(7, 6, true, true, false);
+                draw_pixel(6, 7, true, true, false);
+                draw_pixel(7, 8, true, true, true); // Tâm sét trắng
+                draw_pixel(8, 8, true, true, true);
+                draw_pixel(6, 9, true, true, false);
+                draw_pixel(5, 10, true, true, false);
+                draw_pixel(4, 11, true, true, false);
+                draw_pixel(5, 12, true, true, false);
+                draw_pixel(6, 13, true, true, false);
+                draw_pixel(7, 14, true, true, false);
+                fb_render();
+                vTaskDelay(pdMS_TO_TICKS(60));
+
+                // Chớp trắng toàn màn hình
+                for (int ic = 0; ic < NUM_ICS; ic++) {
+                    for (int r = 0; r < 24; r++) fb[ic][r] = 0xFF;
+                }
+                fb_render();
+                vTaskDelay(pdMS_TO_TICKS(40));
+
+                fb_clear();
+                fb_render();
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+        }
+    }
+}
+
+// ============================================================================
+// HIỆU ỨNG 5: CỘT SÓNG ÂM THANH NHẢY NHẠC (AUDIO EQUALIZER)
+// ============================================================================
+static void anim_equalizer(int duration_ms) {
+    ESP_LOGI(TAG, ">>> HIEU UNG 5: COT SONG AM NHAC (EQUALIZER) <<<");
+    int heights[16] = {4, 6, 9, 12, 14, 11, 8, 6, 7, 10, 13, 15, 12, 8, 5, 3};
+    int peaks[16] = {0};
+
+    int elapsed = 0;
+    while (elapsed < duration_ms) {
+        fb_clear();
+
+        for (int x = 0; x < 16; x++) {
+            // Thay đổi chiều cao ngẫu nhiên tự nhiên theo nhịp điệu
+            int delta = (rand() % 5) - 2;
+            heights[x] += delta;
+            if (heights[x] < 2) heights[x] = 2;
+            if (heights[x] > 15) heights[x] = 15;
+
+            // Cập nhật đỉnh rơi chậm (Peak Dot)
+            if (heights[x] >= peaks[x]) {
+                peaks[x] = heights[x];
+            } else {
+                if (rand() % 3 == 0) peaks[x]--;
+            }
+
+            // Vẽ cột sóng đổi màu từ đáy lên đỉnh:
+            // Đáy (y=15..11): Xanh Lá | Giữa (y=10..6): Vàng | Đỉnh (y=5..0): Đỏ
+            for (int h = 0; h < heights[x]; h++) {
+                int y = 15 - h;
+                if (y >= 11) {
+                    draw_pixel(x, y, false, true, false); // Xanh Lá
+                } else if (y >= 6) {
+                    draw_pixel(x, y, true, true, false);  // Vàng
+                } else {
+                    draw_pixel(x, y, true, false, false); // Đỏ
+                }
+            }
+
+            // Vẽ điểm đỉnh rơi chậm (Màu Trắng)
+            int peak_y = 15 - peaks[x];
+            if (peak_y >= 0 && peak_y < 16) {
+                draw_pixel(x, peak_y, true, true, true);
+            }
+        }
+
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(70)); // ~14 FPS mượt mà
+        elapsed += 70;
+    }
+}
+
+// ============================================================================
+// HIỆU ỨNG 6: NGỌN LỬA BẬP BÙNG (DOOM FIRE EFFECT)
+// ============================================================================
+static void anim_doom_fire(int duration_ms) {
+    ESP_LOGI(TAG, ">>> HIEU UNG 6: NGON LUA BAP BUNG (FIRE EFFECT) <<<");
+    uint8_t fire[16][16];
+    memset(fire, 0, sizeof(fire));
+
+    int elapsed = 0;
+    while (elapsed < duration_ms) {
+        // 1. Tạo nguồn nhiệt ngẫu nhiên ở đáy (y = 15)
+        for (int x = 0; x < 16; x++) {
+            fire[15][x] = (rand() % 4 == 0) ? 2 : 3; // Mức 2 (Vàng) hoặc 3 (Trắng)
+        }
+
+        // 2. Truyền nhiệt lên trên và làm nguội
+        for (int y = 0; y < 15; y++) {
+            for (int x = 0; x < 16; x++) {
+                int src_x = (x + (rand() % 3) - 1 + 16) % 16;
+                int decay = rand() % 2;
+                int heat = fire[y + 1][src_x];
+                fire[y][x] = (heat > decay) ? (heat - decay) : 0;
+            }
+        }
+
+        // 3. Render ra màu RGB: 3=Trắng, 2=Vàng, 1=Đỏ, 0=Tắt
+        fb_clear();
+        for (int y = 0; y < 16; y++) {
+            for (int x = 0; x < 16; x++) {
+                uint8_t h = fire[y][x];
+                if (h == 3) {
+                    draw_pixel(x, y, true, true, true);   // Trắng (nóng nhất)
+                } else if (h == 2) {
+                    draw_pixel(x, y, true, true, false);  // Vàng
+                } else if (h == 1) {
+                    draw_pixel(x, y, true, false, false); // Đỏ
+                }
+            }
+        }
+
+        fb_render();
+        vTaskDelay(pdMS_TO_TICKS(50)); // 20 FPS cực mượt
+        elapsed += 50;
     }
 }
 
 // ============================================================================
 // TASK ĐIỀU KHIỂN CHÍNH
 // ============================================================================
-static void display_task(void *pvParameters) {
-    ESP_LOGI(TAG, "=== KHOI DONG MAN HINH 16x16 FULL RGB ===");
+static void animation_task(void *pvParameters) {
+    ESP_LOGI(TAG, "=== KHOI DONG TRINH DIEN DO HOA 16x16 FULL RGB ===");
 
     for (int i = 0; i < NUM_ICS; i++) {
         init_ht16d35a(i);
@@ -283,51 +512,36 @@ static void display_task(void *pvParameters) {
     }
 
     vTaskDelay(pdMS_TO_TICKS(1000));
-    int color_idx = 0;
 
     while (1) {
-        // ====================================================================
-        // PHẦN 1: HIỂN THỊ CÁC CHỮ SỐ TỪ 0 ĐẾN 9 (MỖI SỐ ĐỔI MÀU RGB)
-        // ====================================================================
-        ESP_LOGI(TAG, ">>> BAT DAU HIEN THI CAC SO TU 0 DEN 9 <<<");
-        for (char num = '0'; num <= '9'; num++) {
-            ColorRGB col = PALETTE[color_idx % NUM_COLORS];
-            color_idx++;
+        // 1. TRÁI TIM ĐẬP (6 giây)
+        anim_beating_heart(6000);
+        fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
 
-            ESP_LOGI(TAG, "Hien thi So: %c | Mau: %s", num, col.name);
-            show_char(num, col);
+        // 2. MẶT CƯỜI NHÁY MẮT (6 giây)
+        anim_winking_smiley(6000);
+        fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
 
-            // Giữ 1.2 giây để quan sát rõ ràng
-            vTaskDelay(pdMS_TO_TICKS(1200));
-        }
+        // 3. PAC-MAN HÁ MỒM ĂN KẸO (6 giây)
+        anim_pacman(6000);
+        fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
 
-        // Chớp tắt nghỉ 0.5s
-        fb_clear(); fb_render();
-        vTaskDelay(pdMS_TO_TICKS(500));
+        // 4. MÂY MƯA RƠI & SẤM CHỚP (6 giây)
+        anim_rain_and_thunder(6500);
+        fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
 
-        // ====================================================================
-        // PHẦN 2: HIỂN THỊ CÁC CHỮ CÁI TỪ A ĐẾN Z (MỖI CHỮ ĐỔI MÀU RGB)
-        // ====================================================================
-        ESP_LOGI(TAG, ">>> BAT DAU HIEN THI CAC CHU CAI TU A DEN Z <<<");
-        for (char ch = 'A'; ch <= 'Z'; ch++) {
-            ColorRGB col = PALETTE[color_idx % NUM_COLORS];
-            color_idx++;
+        // 5. CỘT SÓNG ÂM NHẠC (8 giây)
+        anim_equalizer(8000);
+        fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
 
-            ESP_LOGI(TAG, "Hien thi Chu: %c | Mau: %s", ch, col.name);
-            show_char(ch, col);
-
-            // Giữ 1.0 giây mỗi chữ cái
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-
-        // Chớp tắt nghỉ 0.5s
-        fb_clear(); fb_render();
-        vTaskDelay(pdMS_TO_TICKS(500));
+        // 6. NGỌN LỬA BẬP BÙNG (8 giây)
+        anim_doom_fire(8000);
+        fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
 
 extern "C" void app_main(void) {
-    ESP_LOGI(TAG, "ESP32-C3 16x16 RGB DISPLAY - NUMBERS & LETTERS");
+    ESP_LOGI(TAG, "ESP32-C3 16x16 RGB PIXEL ART ANIMATIONS");
     init_gpio();
-    xTaskCreate(display_task, "display_task", 4096, NULL, 5, NULL);
+    xTaskCreate(animation_task, "anim_task", 4096, NULL, 5, NULL);
 }
