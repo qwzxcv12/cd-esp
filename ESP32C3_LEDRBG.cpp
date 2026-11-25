@@ -310,108 +310,6 @@ init_chip:
 // ============================================================================
 // BỘ ĐIỀU KHIỂN ÂM THANH ES8388 & I2S MASTER
 // ============================================================================
-static bool test_mclk_on_gpio(gpio_num_t mclk_gpio, int *out_bclk_edges, int *out_ws_edges) {
-    gpio_reset_pin(PIN_I2S_BCLK);
-    gpio_reset_pin(PIN_I2S_WS);
-    gpio_set_direction(PIN_I2S_BCLK, GPIO_MODE_INPUT);
-    gpio_set_direction(PIN_I2S_WS, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(PIN_I2S_BCLK, GPIO_PULLDOWN_ONLY);
-    gpio_set_pull_mode(PIN_I2S_WS, GPIO_PULLDOWN_ONLY);
-
-    if (mclk_gpio != PIN_DIO) {
-        gpio_reset_pin(mclk_gpio);
-        gpio_set_direction(mclk_gpio, GPIO_MODE_INPUT);
-        gpio_set_pull_mode(mclk_gpio, GPIO_PULLUP_ONLY);
-        delay_us(50);
-        if (gpio_get_level(mclk_gpio) == 0) {
-            LOG_DIRECT("  [Probe MCLK] Bo qua GPIO %d (bi keo xuong GND)\r\n", mclk_gpio);
-            return false;
-        }
-    }
-
-    ledc_timer_config_t timer_conf = {};
-    timer_conf.speed_mode      = LEDC_LOW_SPEED_MODE;
-    timer_conf.duty_resolution = LEDC_TIMER_2_BIT;
-    timer_conf.timer_num       = LEDC_TIMER_0;
-    timer_conf.freq_hz         = 1000000; // 1 MHz
-    timer_conf.clk_cfg         = LEDC_AUTO_CLK;
-    if (ledc_timer_config(&timer_conf) != ESP_OK) return false;
-
-    ledc_channel_config_t ch_conf = {};
-    ch_conf.gpio_num   = mclk_gpio;
-    ch_conf.speed_mode = LEDC_LOW_SPEED_MODE;
-    ch_conf.channel    = LEDC_CHANNEL_0;
-    ch_conf.intr_type  = LEDC_INTR_DISABLE;
-    ch_conf.timer_sel  = LEDC_TIMER_0;
-    ch_conf.duty       = 2; // 50% duty
-    ch_conf.hpoint     = 0;
-    if (ledc_channel_config(&ch_conf) != ESP_OK) return false;
-
-    vTaskDelay(pdMS_TO_TICKS(5));
-
-    int bclk_edges = 0, ws_edges = 0;
-    int last_b = gpio_get_level(PIN_I2S_BCLK);
-    int last_w = gpio_get_level(PIN_I2S_WS);
-    for (int i = 0; i < 25000; i++) {
-        int b = gpio_get_level(PIN_I2S_BCLK);
-        int w = gpio_get_level(PIN_I2S_WS);
-        if (b != last_b) { bclk_edges++; last_b = b; }
-        if (w != last_w) { ws_edges++;   last_w = w; }
-    }
-
-    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-    gpio_reset_pin(mclk_gpio);
-
-    *out_bclk_edges = bclk_edges;
-    *out_ws_edges = ws_edges;
-    return (bclk_edges > 10 || ws_edges > 4);
-}
-
-static void probe_es8388_clocks(void) {
-    if (!s_es8388_ready) return;
-    LOG_DIRECT("[Probe ES8388] Dang thu che do Master Mode de do chan MCLK/SCLK/LRCK...\r\n");
-
-    // Dat ES8388 tam thoi sang Master Mode (0x08=0x8A: MSC=1, BCLK=MCLK/16)
-    es8388_write_reg(0x02, 0xF3);
-    es8388_write_reg(0x00, 0x16);
-    es8388_write_reg(0x01, 0x40);
-    es8388_write_reg(0x03, 0x00);
-    es8388_write_reg(0x0D, 0x02); // ADCFsRatio = 256Fs
-    es8388_write_reg(0x18, 0x02); // DACFsRatio = 256Fs
-    es8388_write_reg(0x2B, 0x80);
-    es8388_write_reg(0x08, 0x8A); // MSC=1 (Master), BCLKDIV=10 (MCLK/16)
-    es8388_write_reg(0x02, 0x00); // Power UP DLL & clocks
-    vTaskDelay(pdMS_TO_TICKS(10));
-
-    gpio_num_t candidates[] = {GPIO_NUM_8, GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4, GPIO_NUM_10, GPIO_NUM_0};
-    gpio_num_t found_mclk = GPIO_NUM_NC;
-
-    for (size_t idx = 0; idx < sizeof(candidates) / sizeof(candidates[0]); idx++) {
-        gpio_num_t g = candidates[idx];
-        int b_edges = 0, w_edges = 0;
-        bool ok = test_mclk_on_gpio(g, &b_edges, &w_edges);
-        LOG_DIRECT("  [Probe MCLK] GPIO %2d -> SCLK_edges=%5d, LRCK_edges=%4d %s\r\n",
-                   g, b_edges, w_edges, ok ? "<== KHOP!" : "");
-        if (ok && found_mclk == GPIO_NUM_NC && g != PIN_DIO) {
-            found_mclk = g;
-        }
-    }
-
-    // Khoi phuc lai PIN_DIO (GPIO 0) cho LED
-    gpio_reset_pin(PIN_DIO);
-    gpio_set_direction(PIN_DIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(PIN_DIO, 0);
-
-    // Tra ES8388 ve Slave Mode
-    es8388_write_reg(0x08, 0x00);
-    if (found_mclk != GPIO_NUM_NC) {
-        s_mclk_pin = found_mclk;
-        LOG_DIRECT("[Probe ES8388] >>> XAC NHAN CHAN MCLK LA GPIO %d! <<<\r\n", s_mclk_pin);
-    } else {
-        LOG_DIRECT("[Probe ES8388] >>> CANH BAO: Khong thay xung BCLK/LRCK tra ve! Kiem tra han chan 1/5/7! <<<\r\n");
-    }
-}
-
 static bool init_i2s(void) {
     LOG_DIRECT("[I2S] Dang khoi tao I2S Master (MCLK=%d, BCLK=%d, DOUT=%d, WS=%d, Rate=%dHz)...\r\n",
                s_mclk_pin, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS, I2S_SAMPLE_RATE);
@@ -421,7 +319,7 @@ static bool init_i2s(void) {
     gpio_reset_pin(PIN_I2S_DOUT);
     gpio_reset_pin(PIN_I2S_WS);
 
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
     esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, NULL);
     if (ret != ESP_OK) {
@@ -430,11 +328,7 @@ static bool init_i2s(void) {
     }
 
     i2s_std_config_t std_cfg = {
-        .clk_cfg = {
-            .sample_rate_hz = I2S_SAMPLE_RATE,
-            .clk_src = I2S_CLK_SRC_DEFAULT,
-            .mclk_multiple = I2S_MCLK_MULTIPLE_256,
-        },
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(I2S_SAMPLE_RATE),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = s_mclk_pin,
@@ -456,21 +350,52 @@ static bool init_i2s(void) {
         return false;
     }
 
+    int16_t zeros[256] = {0};
+    size_t preloaded = 0;
+    esp_err_t pret = i2s_channel_preload_data(s_tx_handle, zeros, sizeof(zeros), &preloaded);
+    LOG_DIRECT("[I2S] Preload DMA: %s (bytes=%u)\r\n", esp_err_to_name(pret), (unsigned)preloaded);
+
     ret = i2s_channel_enable(s_tx_handle);
     if (ret != ESP_OK) {
         LOG_DIRECT("[I2S] Loi enable channel: %s\r\n", esp_err_to_name(ret));
         return false;
     }
 
-    // Bom 100ms du lieu 0 (im lang) de clock MCLK/BCLK/WS on dinh truoc khi mo loa
-    int16_t zeros[256] = {0};
+    // Bat input song song de kiem tra thuc te GPIO MCLK/BCLK/WS co dang dao xung hay bi cham
+    gpio_input_enable(s_mclk_pin);
+    gpio_input_enable(PIN_I2S_BCLK);
+    gpio_input_enable(PIN_I2S_WS);
+
+    int mclk_edges = 0, bclk_edges = 0, ws_edges = 0;
+    int lm = gpio_get_level(s_mclk_pin);
+    int lb = gpio_get_level(PIN_I2S_BCLK);
+    int lw = gpio_get_level(PIN_I2S_WS);
+    for (int i = 0; i < 40000; i++) {
+        int m = gpio_get_level(s_mclk_pin);
+        int b = gpio_get_level(PIN_I2S_BCLK);
+        int w = gpio_get_level(PIN_I2S_WS);
+        if (m != lm) { mclk_edges++; lm = m; }
+        if (b != lb) { bclk_edges++; lb = b; }
+        if (w != lw) { ws_edges++;   lw = w; }
+    }
+    LOG_DIRECT("[I2S] Xung thuc te: MCLK(GPIO%d)=%d, BCLK(GPIO%d)=%d, WS(GPIO%d)=%d\r\n",
+               s_mclk_pin, mclk_edges, PIN_I2S_BCLK, bclk_edges, PIN_I2S_WS, ws_edges);
+
+    // Bom du lieu im lang bang timeout_ms=1000ms (IDF v5.1 tinh bang ms, khong phai ticks)
     size_t written = 0;
-    for (int i = 0; i < 32; i++) {
-        i2s_channel_write(s_tx_handle, zeros, sizeof(zeros), &written, pdMS_TO_TICKS(50));
+    bool warmup_ok = true;
+    for (int i = 0; i < 16; i++) {
+        esp_err_t wret = i2s_channel_write(s_tx_handle, zeros, sizeof(zeros), &written, 1000);
+        if (wret != ESP_OK) {
+            LOG_DIRECT("[I2S] LOI warmup write #%d: %s (written=%u)\r\n",
+                       i, esp_err_to_name(wret), (unsigned)written);
+            warmup_ok = false;
+            break;
+        }
     }
 
-    LOG_DIRECT("[I2S] I2S Driver da san sang xuat xung Master Clock va Data!\r\n");
-    return true;
+    LOG_DIRECT("[I2S] Warmup write: %s | I2S Driver san sang!\r\n", warmup_ok ? "OK" : "FAILED");
+    return warmup_ok;
 }
 
 static bool init_es8388(void) {
@@ -626,7 +551,7 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
             phase += phase_step;
         }
         size_t written = 0;
-        esp_err_t werr = i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, pdMS_TO_TICKS(100));
+        esp_err_t werr = i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, 1000);
         if (werr != ESP_OK) {
             LOG_DIRECT("[AUDIO] Loi I2S write: %s\r\n", esp_err_to_name(werr));
             break;
@@ -692,7 +617,11 @@ static void play_thunder_sfx(void) {
             buf[i * 2 + 1] = val;
         }
         size_t written = 0;
-        i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, pdMS_TO_TICKS(100));
+        esp_err_t werr = i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, 1000);
+        if (werr != ESP_OK) {
+            LOG_DIRECT("[AUDIO] Loi I2S write (thunder): %s\r\n", esp_err_to_name(werr));
+            break;
+        }
         samples_left -= chunk;
     }
 }
@@ -724,7 +653,11 @@ static void play_fire_crackles(void) {
             buf[i * 2 + 1] = val;
         }
         size_t written = 0;
-        i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, pdMS_TO_TICKS(100));
+        esp_err_t werr = i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, 1000);
+        if (werr != ESP_OK) {
+            LOG_DIRECT("[AUDIO] Loi I2S write (fire): %s\r\n", esp_err_to_name(werr));
+            break;
+        }
         samples_left -= chunk;
     }
 }
@@ -748,6 +681,9 @@ static void audio_task(void *pvParameters) {
                 case SOUND_EQUALIZER: play_equalizer_melody(); break;
                 case SOUND_FIRE:      play_fire_crackles(); break;
                 default: break;
+            }
+            if (sfx_count <= 5) {
+                LOG_DIRECT("[AUDIO] Xong hieu ung #%d (count=%lu)\r\n", (int)sfx, (unsigned long)sfx_count);
             }
         }
     }
@@ -1057,11 +993,6 @@ static void anim_doom_fire(int duration_ms) {
 static void display_task(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(500));
     scan_and_init_i2c();
-
-    // Do chan MCLK/SCLK/LRCK thuc te qua che do Master Mode cua ES8388
-    if (s_es8388_ready) {
-        probe_es8388_clocks();
-    }
 
     if (s_i2c_ready) {
         LOG_DIRECT("=== KHOI TAO 4 CHIP HT16D35A QUA PI4IOE5V6416 ===\r\n");
