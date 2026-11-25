@@ -314,10 +314,23 @@ static bool init_i2s(void) {
     LOG_DIRECT("[I2S] Dang khoi tao I2S Master (MCLK=%d, BCLK=%d, DOUT=%d, WS=%d, Rate=%dHz)...\r\n",
                s_mclk_pin, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS, I2S_SAMPLE_RATE);
 
-    gpio_reset_pin(s_mclk_pin);
-    gpio_reset_pin(PIN_I2S_BCLK);
-    gpio_reset_pin(PIN_I2S_DOUT);
-    gpio_reset_pin(PIN_I2S_WS);
+    // Kiem tra nhanh tinh trang cham chan truoc khi gan cho I2S
+    const gpio_num_t i2s_pins[4] = {s_mclk_pin, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS};
+    const char *i2s_names[4] = {"MCLK", "BCLK", "DOUT", "WS"};
+    for (int i = 0; i < 4; i++) {
+        gpio_reset_pin(i2s_pins[i]);
+        gpio_set_direction(i2s_pins[i], GPIO_MODE_INPUT);
+        gpio_set_pull_mode(i2s_pins[i], GPIO_PULLUP_ONLY);
+        delay_us(30);
+        int hi = gpio_get_level(i2s_pins[i]);
+        gpio_set_pull_mode(i2s_pins[i], GPIO_PULLDOWN_ONLY);
+        delay_us(30);
+        int lo = gpio_get_level(i2s_pins[i]);
+        gpio_reset_pin(i2s_pins[i]);
+        LOG_DIRECT("[I2S PinCheck] %s(GPIO%d): PU=%d PD=%d %s\r\n",
+                   i2s_names[i], i2s_pins[i], hi, lo,
+                   (hi == 0) ? "<-- KEOVAO GND!" : ((lo == 1) ? "<-- KEOVAO 3V3!" : "(OK/Tha noi)"));
+    }
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
@@ -360,26 +373,6 @@ static bool init_i2s(void) {
         LOG_DIRECT("[I2S] Loi enable channel: %s\r\n", esp_err_to_name(ret));
         return false;
     }
-
-    // Bat input song song de kiem tra thuc te GPIO MCLK/BCLK/WS co dang dao xung hay bi cham
-    gpio_input_enable(s_mclk_pin);
-    gpio_input_enable(PIN_I2S_BCLK);
-    gpio_input_enable(PIN_I2S_WS);
-
-    int mclk_edges = 0, bclk_edges = 0, ws_edges = 0;
-    int lm = gpio_get_level(s_mclk_pin);
-    int lb = gpio_get_level(PIN_I2S_BCLK);
-    int lw = gpio_get_level(PIN_I2S_WS);
-    for (int i = 0; i < 40000; i++) {
-        int m = gpio_get_level(s_mclk_pin);
-        int b = gpio_get_level(PIN_I2S_BCLK);
-        int w = gpio_get_level(PIN_I2S_WS);
-        if (m != lm) { mclk_edges++; lm = m; }
-        if (b != lb) { bclk_edges++; lb = b; }
-        if (w != lw) { ws_edges++;   lw = w; }
-    }
-    LOG_DIRECT("[I2S] Xung thuc te: MCLK(GPIO%d)=%d, BCLK(GPIO%d)=%d, WS(GPIO%d)=%d\r\n",
-               s_mclk_pin, mclk_edges, PIN_I2S_BCLK, bclk_edges, PIN_I2S_WS, ws_edges);
 
     // Bom du lieu im lang bang timeout_ms=1000ms (IDF v5.1 tinh bang ms, khong phai ticks)
     size_t written = 0;
