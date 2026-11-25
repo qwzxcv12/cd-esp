@@ -34,7 +34,7 @@
 
 // --- I2C BUS CHUNG (PI4IOE5V6416 & ES8388) ---
 #define I2C_PORT_NUM    I2C_NUM_0
-#define I2C_FREQ_HZ     50000
+#define I2C_FREQ_HZ     25000
 
 #define NUM_ICS         4
 #define NUM_ROWS_PER_IC 28
@@ -88,7 +88,15 @@ static const int16_t SINE_TABLE[256] = {
 static esp_err_t i2c_write_byte(uint8_t reg, uint8_t val) {
     if (!s_i2c_ready) return ESP_FAIL;
     uint8_t buf[2] = {reg, val};
-    return i2c_master_write_to_device(I2C_PORT_NUM, s_i2c_addr, buf, 2, pdMS_TO_TICKS(15));
+    esp_err_t err = i2c_master_write_to_device(I2C_PORT_NUM, s_i2c_addr, buf, 2, pdMS_TO_TICKS(30));
+    if (err != ESP_OK) {
+        static int s_pi_errs = 0;
+        if (s_pi_errs < 5) {
+            s_pi_errs++;
+            LOG_DIRECT("[PI4IOE] Loi I2C 0x%02X=0x%02X (%s)\r\n", reg, val, esp_err_to_name(err));
+        }
+    }
+    return err;
 }
 
 static esp_err_t es8388_write_reg(uint8_t reg, uint8_t val) {
@@ -207,12 +215,14 @@ static bool probe_i2c_addr(uint8_t addr) {
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
     i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(I2C_PORT_NUM, cmd, pdMS_TO_TICKS(20));
+    esp_err_t ret = i2c_master_cmd_begin(I2C_PORT_NUM, cmd, pdMS_TO_TICKS(40));
     i2c_cmd_link_delete(cmd);
     return (ret == ESP_OK);
 }
 
 static bool try_i2c_pair(gpio_num_t sda, gpio_num_t scl) {
+    s_i2c_ready = false;
+    s_es8388_ready = false;
     i2c_driver_delete(I2C_PORT_NUM);
     vTaskDelay(pdMS_TO_TICKS(10));
 
@@ -254,20 +264,7 @@ static bool try_i2c_pair(gpio_num_t sda, gpio_num_t scl) {
         LOG_DIRECT("[I2C] >>> ES8388 DAC san sang tai 0x11 <<<\r\n");
     }
 
-    if (s_i2c_ready) return true;
-
-    // Nếu chưa thấy, quét nhanh các địa chỉ còn lại
-    for (uint8_t a = 0x10; a < 0x78; a++) {
-        if (a == 0x20 || a == 0x21) continue;
-        if (probe_i2c_addr(a)) {
-            LOG_DIRECT("[I2C] Phat hien thiet bi tai 0x%02X\r\n", a);
-            if (a == 0x10 || a == 0x11) {
-                s_es8388_addr = a;
-                s_es8388_ready = true;
-            }
-        }
-    }
-    return s_i2c_ready;
+    return (s_i2c_ready || s_es8388_ready);
 }
 
 static void i2c_bus_recover(gpio_num_t sda, gpio_num_t scl) {
@@ -279,27 +276,32 @@ static void i2c_bus_recover(gpio_num_t sda, gpio_num_t scl) {
     gpio_set_pull_mode(scl, GPIO_PULLUP_ONLY);
     gpio_set_level(sda, 1);
     gpio_set_level(scl, 1);
-    delay_us(10);
+    delay_us(20);
+    int sda_before = gpio_get_level(sda);
+    int scl_before = gpio_get_level(scl);
     for (int i = 0; i < 9; i++) {
         if (gpio_get_level(sda) == 1) break;
         gpio_set_level(scl, 0);
-        delay_us(10);
+        delay_us(15);
         gpio_set_level(scl, 1);
-        delay_us(10);
+        delay_us(15);
     }
     gpio_set_level(sda, 0);
-    delay_us(10);
+    delay_us(15);
     gpio_set_level(scl, 1);
-    delay_us(10);
+    delay_us(15);
     gpio_set_level(sda, 1);
-    delay_us(10);
+    delay_us(20);
+    int sda_after = gpio_get_level(sda);
+    int scl_after = gpio_get_level(scl);
+    LOG_DIRECT("[I2C Bus] Truoc recover: SDA=%d SCL=%d | Sau recover: SDA=%d SCL=%d\r\n",
+               sda_before, scl_before, sda_after, scl_after);
 }
 
 static void scan_and_init_i2c(void) {
     i2c_bus_recover(GPIO_NUM_20, GPIO_NUM_21);
-    if (try_i2c_pair(GPIO_NUM_20, GPIO_NUM_21)) goto init_chip;
-    if (try_i2c_pair(GPIO_NUM_21, GPIO_NUM_20)) goto init_chip;
-    LOG_DIRECT("[I2C] Dang cho ket noi chip PI4IOE5V6416...\r\n");
+    if (try_i2c_pair(GPIO_NUM_20, GPIO_NUM_21) && s_i2c_ready) goto init_chip;
+    LOG_DIRECT("[I2C] Dang cho ket noi chip PI4IOE5V6416 / ES8388...\r\n");
     return;
 
 init_chip:
@@ -1014,7 +1016,19 @@ static void anim_doom_fire(int duration_ms) {
 // ============================================================================
 static void display_task(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(500));
+
+    // Khoi tao I2S truoc de MCLK on dinh, roi moi quet I2C & cau hinh ES8388 truoc khi bat LED
+    init_i2s();
+    vTaskDelay(pdMS_TO_TICKS(50));
     scan_and_init_i2c();
+
+    if (s_es8388_ready) {
+        if (!init_es8388()) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            scan_and_init_i2c();
+            init_es8388();
+        }
+    }
 
     if (s_i2c_ready) {
         LOG_DIRECT("=== KHOI TAO 4 CHIP HT16D35A QUA PI4IOE5V6416 ===\r\n");
@@ -1025,33 +1039,27 @@ static void display_task(void *pvParameters) {
         LOG_DIRECT("=== KHOI TAO HT16D35A THANH CONG! ===\r\n");
     }
 
-    // Khởi tạo I2S và DAC ES8388 (cho 50ms on dinh MCLK truoc khi ghi I2C)
-    init_i2s();
-    vTaskDelay(pdMS_TO_TICKS(50));
-    if (!init_es8388()) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        init_es8388();
-    }
-
     uint32_t round = 0;
     while (1) {
-        if (!s_i2c_ready) {
-            LOG_DIRECT("[Quet I2C] Dang tim chip PI4IOE5V6416...\r\n");
+        if (!s_i2c_ready || !s_es8388_inited) {
+            LOG_DIRECT("[Quet I2C] Dang tim / khoi phuc I2C (PI4=%d, ES=%d)...\r\n",
+                       s_i2c_ready ? 1 : 0, s_es8388_inited ? 1 : 0);
             scan_and_init_i2c();
+            if (s_es8388_ready && !s_es8388_inited) {
+                init_es8388();
+            }
             if (s_i2c_ready) {
                 for (int i = 0; i < NUM_ICS; i++) {
                     init_ht16d35a(i);
                     vTaskDelay(pdMS_TO_TICKS(30));
                 }
-                if (!s_es8388_inited) {
-                    init_es8388();
-                }
             }
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        } else {
-            if (!s_es8388_inited) {
-                init_es8388();
+            if (!s_i2c_ready && !s_es8388_inited) {
+                vTaskDelay(pdMS_TO_TICKS(1500));
+                continue;
             }
+        }
+        if (s_i2c_ready || s_es8388_inited) {
 
             // Test do nguong sach tieng theo 5 buoc ro rang:
             // Buoc 0: LED TAT, OUT=0x16 (-12dB), vol=12000 (muc 2c6699f tung nghe sach)
