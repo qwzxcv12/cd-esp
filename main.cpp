@@ -215,26 +215,42 @@ static bool try_i2c_pair(gpio_num_t sda, gpio_num_t scl) {
     if (i2c_param_config(I2C_PORT_NUM, &conf) != ESP_OK) return false;
     if (i2c_driver_install(I2C_PORT_NUM, conf.mode, 0, 0, 0) != ESP_OK) return false;
 
-    LOG_DIRECT("[I2C] Quet toan bo bus (SDA=%d, SCL=%d):\r\n", sda, scl);
-    for (uint8_t a = 0x08; a < 0x78; a++) {
+    // 1. Kiểm tra nhanh chip PI4IOE5V6416 (0x20 hoặc 0x21)
+    if (probe_i2c_addr(0x20)) {
+        s_i2c_addr = 0x20;
+        s_i2c_ready = true;
+        LOG_DIRECT("[I2C] >>> PI4IOE5V6416 san sang tai 0x20 (SDA=%d, SCL=%d) <<<\r\n", sda, scl);
+    } else if (probe_i2c_addr(0x21)) {
+        s_i2c_addr = 0x21;
+        s_i2c_ready = true;
+        LOG_DIRECT("[I2C] >>> PI4IOE5V6416 san sang tai 0x21 (SDA=%d, SCL=%d) <<<\r\n", sda, scl);
+    }
+
+    // 2. Kiểm tra nhanh chip DAC ES8388 (0x10 hoặc 0x11)
+    if (probe_i2c_addr(0x10)) {
+        s_es8388_addr = 0x10;
+        s_es8388_ready = true;
+        LOG_DIRECT("[I2C] >>> ES8388 DAC san sang tai 0x10 <<<\r\n");
+    } else if (probe_i2c_addr(0x11)) {
+        s_es8388_addr = 0x11;
+        s_es8388_ready = true;
+        LOG_DIRECT("[I2C] >>> ES8388 DAC san sang tai 0x11 <<<\r\n");
+    }
+
+    if (s_i2c_ready) return true;
+
+    // Nếu chưa thấy, quét nhanh các địa chỉ còn lại
+    for (uint8_t a = 0x10; a < 0x78; a++) {
+        if (a == 0x20 || a == 0x21) continue;
         if (probe_i2c_addr(a)) {
-            LOG_DIRECT("  -> Phat hien IC tai dia chi: 0x%02X\r\n", a);
-            if (a == 0x20 || a == 0x21) {
-                s_i2c_addr = a;
-                s_i2c_ready = true;
-            }
+            LOG_DIRECT("[I2C] Phat hien thiet bi tai 0x%02X\r\n", a);
             if (a == 0x10 || a == 0x11) {
                 s_es8388_addr = a;
                 s_es8388_ready = true;
             }
         }
     }
-
-    if (s_i2c_ready) {
-        LOG_DIRECT("[I2C] >>> PI4IOE5V6416 OK tai 0x%02X <<<\r\n", s_i2c_addr);
-        return true;
-    }
-    return false;
+    return s_i2c_ready;
 }
 
 static void scan_and_init_i2c(void) {
@@ -362,19 +378,7 @@ static bool init_es8388(void) {
     return true;
 }
 
-static void init_amplifier_gpio(void) {
-    gpio_config_t io_conf = {};
-    io_conf.pin_bit_mask = (1ULL << GPIO_NUM_2) | (1ULL << GPIO_NUM_3) | (1ULL << GPIO_NUM_4) | (1ULL << GPIO_NUM_10);
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-    gpio_config(&io_conf);
 
-    gpio_set_level(GPIO_NUM_2, 1);
-    gpio_set_level(GPIO_NUM_3, 1);
-    gpio_set_level(GPIO_NUM_4, 1);
-    gpio_set_level(GPIO_NUM_10, 1);
-    LOG_DIRECT("[AMP] Da kich hoat muc logic cao cac chan PA EN du phong (GPIO 2, 3, 4, 10).\r\n");
-}
 
 // ============================================================================
 // HỆ THỐNG ÂM THANH RETRO CHIPTUNE TỔNG HỢP
@@ -939,8 +943,7 @@ extern "C" void app_main(void) {
     gpio_set_level(PIN_CLK, 0);
     gpio_set_level(PIN_DIO, 0);
 
-    // 2. Kích hoạt chân công suất dự phòng (PA EN)
-    init_amplifier_gpio();
+
 
     // 3. Khởi tạo hàng đợi âm thanh
     s_sound_queue = xQueueCreate(10, sizeof(sound_effect_t));
