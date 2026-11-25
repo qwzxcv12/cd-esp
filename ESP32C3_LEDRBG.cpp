@@ -29,7 +29,7 @@
 #define PIN_I2S_BCLK    GPIO_NUM_5
 #define PIN_I2S_DOUT    GPIO_NUM_6
 #define PIN_I2S_WS      GPIO_NUM_7
-#define I2S_SAMPLE_RATE 16000
+#define I2S_SAMPLE_RATE 44100
 
 // --- I2C BUS CHUNG (PI4IOE5V6416 & ES8388) ---
 #define I2C_PORT_NUM    I2C_NUM_0
@@ -183,8 +183,8 @@ static void init_ht16d35a(uint8_t ic_idx) {
     send_cmd_2b(ic_idx, 0x32, 0x07); // 8 COM
     send_cmd_2b(ic_idx, 0x34, 0x01); // Cascade master
     send_cmd_2b(ic_idx, 0x35, 0x00);
-    send_cmd_2b(ic_idx, 0x36, 0x07); // Current ratio max
-    send_cmd_2b(ic_idx, 0x37, 0x3F); // Global brightness max
+    send_cmd_2b(ic_idx, 0x36, 0x03); // Current ratio an toan, tranh sut ap
+    send_cmd_2b(ic_idx, 0x37, 0x18); // Global brightness ro net, em nguon
     send_cmd_2b(ic_idx, 0x38, 0x00);
     send_cmd_2b(ic_idx, 0x20, 0x00);
     send_cmd_2b(ic_idx, 0x41, 0xFF);
@@ -263,7 +263,33 @@ static bool try_i2c_pair(gpio_num_t sda, gpio_num_t scl) {
     return s_i2c_ready;
 }
 
+static void i2c_bus_recover(gpio_num_t sda, gpio_num_t scl) {
+    gpio_reset_pin(sda);
+    gpio_reset_pin(scl);
+    gpio_set_direction(sda, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_set_direction(scl, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_set_pull_mode(sda, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(scl, GPIO_PULLUP_ONLY);
+    gpio_set_level(sda, 1);
+    gpio_set_level(scl, 1);
+    delay_us(10);
+    for (int i = 0; i < 9; i++) {
+        if (gpio_get_level(sda) == 1) break;
+        gpio_set_level(scl, 0);
+        delay_us(10);
+        gpio_set_level(scl, 1);
+        delay_us(10);
+    }
+    gpio_set_level(sda, 0);
+    delay_us(10);
+    gpio_set_level(scl, 1);
+    delay_us(10);
+    gpio_set_level(sda, 1);
+    delay_us(10);
+}
+
 static void scan_and_init_i2c(void) {
+    i2c_bus_recover(GPIO_NUM_20, GPIO_NUM_21);
     if (try_i2c_pair(GPIO_NUM_20, GPIO_NUM_21)) goto init_chip;
     if (try_i2c_pair(GPIO_NUM_21, GPIO_NUM_20)) goto init_chip;
     LOG_DIRECT("[I2C] Dang cho ket noi chip PI4IOE5V6416...\r\n");
@@ -283,8 +309,13 @@ init_chip:
 // BỘ ĐIỀU KHIỂN ÂM THANH ES8388 & I2S MASTER
 // ============================================================================
 static bool init_i2s(void) {
-    LOG_DIRECT("[I2S] Dang khoi tao I2S Master (MCLK=%d, BCLK=%d, DOUT=%d, WS=%d)...\r\n",
-               PIN_I2S_MCLK, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS);
+    LOG_DIRECT("[I2S] Dang khoi tao I2S Master (MCLK=%d, BCLK=%d, DOUT=%d, WS=%d, Rate=%dHz)...\r\n",
+               PIN_I2S_MCLK, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS, I2S_SAMPLE_RATE);
+
+    gpio_reset_pin(PIN_I2S_MCLK);
+    gpio_reset_pin(PIN_I2S_BCLK);
+    gpio_reset_pin(PIN_I2S_DOUT);
+    gpio_reset_pin(PIN_I2S_WS);
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
@@ -327,6 +358,13 @@ static bool init_i2s(void) {
         return false;
     }
 
+    // Bom 100ms du lieu 0 (im lang) de clock MCLK/BCLK/WS on dinh truoc khi mo loa
+    int16_t zeros[256] = {0};
+    size_t written = 0;
+    for (int i = 0; i < 32; i++) {
+        i2s_channel_write(s_tx_handle, zeros, sizeof(zeros), &written, pdMS_TO_TICKS(50));
+    }
+
     LOG_DIRECT("[I2S] I2S Driver da san sang xuat xung Master Clock va Data!\r\n");
     return true;
 }
@@ -347,21 +385,19 @@ static bool init_es8388(void) {
         return false;
     }
 
-    LOG_DIRECT("[ES8388] Khoi tao chip DAC tai dia chi 0x%02X...\r\n", s_es8388_addr);
+    LOG_DIRECT("[ES8388] Khoi tao chip DAC tai dia chi 0x%02X (Chong pop & am luong em tai)...\r\n", s_es8388_addr);
 
-    // 1. Reset state machines & mute trong luc cau hinh
-    es8388_write_reg(0x19, 0x04); // Mute DAC tam thoi
+    // 1. Mute & tat dau ra truoc khi nap dien tu VMID (tranh tieng bup/choi luc khoi dong)
+    es8388_write_reg(0x19, 0x04); // Mute DAC
+    es8388_write_reg(0x04, 0xC0); // Tam tat ca DAC & OUT1/OUT2
     es8388_write_reg(0x02, 0xF3); // Reset / stop ADC & DAC state machines
     es8388_write_reg(0x08, 0x00); // I2S Slave Mode (ESP32 cap MCLK, BCLK, LRCK)
     es8388_write_reg(0x2B, 0x80); // DACCONTROL21: slrck=1 (ADC & DAC dung chung LRCK)
 
-    // 2. Bat nguon tham chieu VMID / EnRef & Ibias (CRITICAL FIX!)
-    // Reg 0x00 bit 2 = EnRef (1), bit 1:0 = VMIDSEL (01 = 50k nap nhanh tu VMID)
-    // Reg 0x01 bit 5 = PdnAna (0 = ON), bit 4 = PdnIbiasgen (0 = ON)
-    es8388_write_reg(0x00, 0x05);
-    es8388_write_reg(0x01, 0x40); // Power ON Analog & Ibias Generator!
-    es8388_write_reg(0x03, 0xFF); // Power down ADC (chi dung DAC phat nhac)
-    es8388_write_reg(0x04, 0x3C); // DAC L/R ON (bit7:6=00), LOUT1/ROUT1/LOUT2/ROUT2 ON (bit5:2=1111)
+    // 2. Bat nguon tham chieu VMID / EnRef & Ibias
+    es8388_write_reg(0x00, 0x05); // EnRef=1, VMIDSEL=01 (50k nap nhanh tu VMID)
+    es8388_write_reg(0x01, 0x40); // Power ON Analog & Ibias Generator
+    es8388_write_reg(0x03, 0xFF); // Power down ADC
     es8388_write_reg(0x07, 0x7C); // Analog voltage management default
 
     // 3. Format I2S 16-bit, MCLK = 256*Fs (Single Speed)
@@ -369,25 +405,26 @@ static bool init_es8388(void) {
     es8388_write_reg(0x18, 0x02); // DACCONTROL2: 256*Fs
 
     // 4. Dinh tuyen DAC -> Output Mixer
-    es8388_write_reg(0x26, 0x00); // DACCONTROL16: Mixer input select
-    es8388_write_reg(0x27, 0x90); // DACCONTROL17: Left DAC -> Left Mixer (LD2LO=1, 0dB)
-    es8388_write_reg(0x2A, 0x90); // DACCONTROL20: Right DAC -> Right Mixer (RD2RO=1, 0dB)
+    es8388_write_reg(0x26, 0x00); // DACCONTROL16
+    es8388_write_reg(0x27, 0x90); // DACCONTROL17: Left DAC -> Left Mixer (0dB)
+    es8388_write_reg(0x2A, 0x90); // DACCONTROL20: Right DAC -> Right Mixer (0dB)
 
-    // 5. Mo Volume toi da (+4.5dB) cho ca OUT1 (Tai nghe) va OUT2 (Loa ngoai)
-    es8388_write_reg(0x2E, 0x21); // LOUT1VOL (+4.5dB)
-    es8388_write_reg(0x2F, 0x21); // ROUT1VOL (+4.5dB)
-    es8388_write_reg(0x30, 0x21); // LOUT2VOL (+4.5dB)
-    es8388_write_reg(0x31, 0x21); // ROUT2VOL (+4.5dB)
-    es8388_write_reg(0x1A, 0x00); // Left Digital Volume = 0dB (khong giam am)
-    es8388_write_reg(0x1B, 0x00); // Right Digital Volume = 0dB (khong giam am)
+    // 5. Dat Volume muc em tai (-9dB = 0x18) de tranh qua tai/meo choi vao PAM8403
+    es8388_write_reg(0x2E, 0x18); // LOUT1VOL (-9dB)
+    es8388_write_reg(0x2F, 0x18); // ROUT1VOL (-9dB)
+    es8388_write_reg(0x30, 0x18); // LOUT2VOL (-9dB)
+    es8388_write_reg(0x31, 0x18); // ROUT2VOL (-9dB)
+    es8388_write_reg(0x1A, 0x00); // Left Digital Volume = 0dB
+    es8388_write_reg(0x1B, 0x00); // Right Digital Volume = 0dB
 
-    // 6. Bat State Machine & DLL, cho tu VMID on dinh roi chuyen che do thuong & Unmute
-    es8388_write_reg(0x02, 0x00); // CHIPPOWER: Power UP toan bo khoi DAC & DLL
-    vTaskDelay(pdMS_TO_TICKS(100));
+    // 6. Bat State Machine & cho VMID nap on dinh 150ms ROI MOI MO OUT1/OUT2 & Unmute
+    es8388_write_reg(0x02, 0x00); // Power UP khoi DAC & DLL
+    vTaskDelay(pdMS_TO_TICKS(150));
     es8388_write_reg(0x00, 0x16); // SameFs=1, EnRef=1, VMIDSEL=10 (500k normal mode)
-    es8388_write_reg(0x19, 0x00); // DACCONTROL3: Unmute DAC!
+    es8388_write_reg(0x04, 0x3C); // DAC L/R ON + OUT1/OUT2 ON
+    es8388_write_reg(0x19, 0x00); // Unmute DAC!
 
-    // 7. Doc nguoc thanh ghi de xac minh ES8388 da nhan cau hinh
+    // 7. Doc nguoc thanh ghi de xac minh ES8388
     uint8_t r00 = 0, r01 = 0, r02 = 0, r04 = 0, r17 = 0, r19 = 0, r27 = 0, r2b = 0, r2e = 0, r30 = 0;
     es8388_read_reg(0x00, &r00);
     es8388_read_reg(0x01, &r01);
@@ -403,8 +440,26 @@ static bool init_es8388(void) {
                r00, r01, r02, r04, r17, r19, r27, r2b, r2e, r30);
 
     s_es8388_inited = true;
-    LOG_DIRECT("[ES8388] Khoi tao thanh cong! VMID/Ibias da bat & un-mute 100%%.\r\n");
+    LOG_DIRECT("[ES8388] Khoi tao thanh cong! Em tai, khong pop, san sang phat nhac.\r\n");
     return true;
+}
+
+static void check_es8388_health(const char *tag) {
+    if (!s_es8388_ready) return;
+    uint8_t r00 = 0, r02 = 0, r04 = 0, r19 = 0;
+    esp_err_t e0 = es8388_read_reg(0x00, &r00);
+    esp_err_t e1 = es8388_read_reg(0x04, &r04);
+    es8388_read_reg(0x02, &r02);
+    es8388_read_reg(0x19, &r19);
+    if (e0 != ESP_OK || e1 != ESP_OK) {
+        LOG_DIRECT("[ES8388 Health @%s] Loi doc I2C!\r\n", tag);
+        return;
+    }
+    LOG_DIRECT("[ES8388 Health @%s] R00=0x%02X R02=0x%02X R04=0x%02X R19=0x%02X\r\n", tag, r00, r02, r04, r19);
+    if (r04 != 0x3C || (r00 & 0x06) == 0 || r19 != 0x00) {
+        LOG_DIRECT("[ES8388] CANH BAO: Chip bi reset/sut ap! Dang khoi tao lai...\r\n");
+        init_es8388();
+    }
 }
 
 
@@ -442,16 +497,21 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
     uint32_t phase = 0;
     uint32_t phase_step = ((uint32_t)freq * 256 * 256) / I2S_SAMPLE_RATE;
 
+    // Giam bien do xuong 1/3 de tranh qua tai PAM8403 (khong bi re choi)
+    int32_t safe_vol = volume / 3;
+    int attack_len = I2S_SAMPLE_RATE / 200; // 5ms
+    int decay_len  = I2S_SAMPLE_RATE / 100; // 10ms
+
     int samples_left = total_samples;
     while (samples_left > 0) {
         int chunk = (samples_left > 128) ? 128 : samples_left;
         for (int i = 0; i < chunk; i++) {
             int current_sample = total_samples - samples_left + i;
-            int current_vol = volume;
-            if (current_sample < 80) {
-                current_vol = (volume * current_sample) / 80;
-            } else if (samples_left - i < 160) {
-                current_vol = (volume * (samples_left - i)) / 160;
+            int32_t current_vol = safe_vol;
+            if (current_sample < attack_len) {
+                current_vol = (safe_vol * current_sample) / attack_len;
+            } else if (samples_left - i < decay_len) {
+                current_vol = (safe_vol * (samples_left - i)) / decay_len;
             }
 
             uint8_t table_idx = (phase >> 8) & 0xFF;
@@ -473,32 +533,32 @@ static void play_startup_jingle(void) {
     vTaskDelay(pdMS_TO_TICKS(15));
     play_tone(784, 90, 24000);  // G5
     vTaskDelay(pdMS_TO_TICKS(15));
-    play_tone(1046, 240, 26000); // C6
+    play_tone(1046, 240, 24000); // C6
 }
 
 static void play_digit_ding(void) {
-    play_tone(1318, 45, 20000); // E6
+    play_tone(1046, 55, 20000); // C6 nhe nhang ro net
 }
 
 static void play_heartbeat_sfx(void) {
-    play_tone(60, 80, 28000);
+    play_tone(130, 80, 26000); // De nghe hon tren loa nho
     vTaskDelay(pdMS_TO_TICKS(60));
-    play_tone(52, 100, 26000);
+    play_tone(100, 100, 22000);
 }
 
 static void play_smiley_sfx(void) {
-    for (int f = 600; f <= 1300; f += 80) {
-        play_tone(f, 20, 22000);
+    for (int f = 600; f <= 1200; f += 75) {
+        play_tone(f, 20, 20000);
     }
 }
 
 static void play_pacman_sfx(void) {
     for (int cycle = 0; cycle < 3; cycle++) {
         for (int f = 380; f <= 750; f += 65) {
-            play_tone(f, 12, 24000);
+            play_tone(f, 12, 22000);
         }
         for (int f = 750; f >= 380; f -= 65) {
-            play_tone(f, 12, 24000);
+            play_tone(f, 12, 22000);
         }
     }
 }
@@ -512,7 +572,7 @@ static void play_thunder_sfx(void) {
 
     while (samples_left > 0) {
         int chunk = (samples_left > 128) ? 128 : samples_left;
-        int vol = (26000 * samples_left) / total_samples;
+        int vol = (8500 * samples_left) / total_samples;
 
         for (int i = 0; i < chunk; i++) {
             seed = seed * 1103515245 + 12345;
@@ -547,9 +607,9 @@ static void play_fire_crackles(void) {
             seed = seed * 1664525 + 1013904223;
             int16_t val = 0;
             if ((seed & 0xFFF) < 15) {
-                val = (seed & 0x1) ? 22000 : -22000;
+                val = (seed & 0x1) ? 7000 : -7000;
             } else if ((seed & 0xFF) < 35) {
-                val = (int16_t)((seed & 0x7FF) - 1024);
+                val = (int16_t)(((seed & 0x7FF) - 1024) / 2);
             }
             buf[i * 2]     = val;
             buf[i * 2 + 1] = val;
@@ -897,9 +957,6 @@ static void display_task(void *pvParameters) {
     init_i2s();
     init_es8388();
 
-    // Phát chuông khởi động
-    trigger_sound(SOUND_STARTUP);
-
     uint32_t round = 0;
     while (1) {
         if (!s_i2c_ready) {
@@ -922,6 +979,7 @@ static void display_task(void *pvParameters) {
             // 1. Test màu toàn màn hình (R, G, B, White)
             test_full_colors();
             fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
+            check_es8388_health("AfterColors");
 
             // 2. Chữ số 0 -> 9
             test_digits_0_to_9();
@@ -956,6 +1014,7 @@ static void display_task(void *pvParameters) {
             fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(500));
 
             round++;
+            check_es8388_health("EndRound");
             LOG_DIRECT(">>> Hoan thanh vong lap trinh dien thu: %lu <<<\r\n", (unsigned long)round);
         }
     }
