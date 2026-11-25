@@ -16,7 +16,6 @@
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/i2s_std.h"
-#include "driver/ledc.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "font16x16.h"
@@ -30,7 +29,7 @@
 #define PIN_I2S_BCLK    GPIO_NUM_5
 #define PIN_I2S_DOUT    GPIO_NUM_6
 #define PIN_I2S_WS      GPIO_NUM_7
-#define I2S_SAMPLE_RATE 44100
+#define I2S_SAMPLE_RATE 48000
 
 // --- I2C BUS CHUNG (PI4IOE5V6416 & ES8388) ---
 #define I2C_PORT_NUM    I2C_NUM_0
@@ -327,6 +326,8 @@ static bool init_i2s(void) {
     gpio_reset_pin(PIN_I2S_WS);
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num = 8;
+    chan_cfg.dma_frame_num = 256;
     chan_cfg.auto_clear = true;
     esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, NULL);
     if (ret != ESP_OK) {
@@ -401,48 +402,52 @@ static bool init_es8388(void) {
         return false;
     }
 
-    LOG_DIRECT("[ES8388] Khoi tao chip DAC tai dia chi 0x%02X...\r\n", s_es8388_addr);
+    LOG_DIRECT("[ES8388] Khoi tao chip DAC tai dia chi 0x%02X (chuan ESP-ADF + tat DLL noi)...\r\n", s_es8388_addr);
 
-    // 1. Mute & tat dau ra truoc khi nap dien tu VMID
-    es8388_write_reg(0x19, 0x04); // Mute DAC
-    es8388_write_reg(0x04, 0xC0); // Tam tat ca DAC & OUT1/OUT2
-    es8388_write_reg(0x02, 0xF3); // Reset / stop ADC & DAC state machines
-    es8388_write_reg(0x08, 0x00); // I2S Slave Mode (ESP32 cap MCLK, BCLK, LRCK)
-    es8388_write_reg(0x2B, 0x80); // DACCONTROL21: slrck=1 (ADC & DAC dung chung LRCK)
-    es8388_write_reg(0x2D, 0x00); // DACCONTROL23: VROI = 0
+    // 1. Mute & tat dau ra truoc khi cau hinh (theo espressif/esp-adf es8388.c)
+    es8388_write_reg(0x19, 0x04); // DACCONTROL3: Mute DAC
+    es8388_write_reg(0x04, 0xC0); // DACPOWER: Tam tat DAC & OUT1/OUT2
+    es8388_write_reg(0x01, 0x50); // CONTROL2: Cau hinh bias/Vref chuan Espressif (thay cho 0x00)
+    es8388_write_reg(0x02, 0x00); // CHIPPOWER: Power up khoi chinh
 
-    // 2. Bat nguon tham chieu VMID / EnRef & Ibias (full normal analog bias)
-    es8388_write_reg(0x00, 0x05); // EnRef=1, VMIDSEL=01 (50k nap nhanh tu VMID)
-    es8388_write_reg(0x01, 0x00); // Power ON Analog, Vref & Ibias Generator (full bias)
-    es8388_write_reg(0x03, 0xFF); // Power down ADC
-    es8388_write_reg(0x07, 0x7C); // Analog voltage management default
+    // 2. Tat DLL noi (fix bat buoc cua Espressif cho MCLK/Fs khong dung APLL nhu ESP32-C3)
+    es8388_write_reg(0x35, 0xA0);
+    es8388_write_reg(0x37, 0xD0);
+    es8388_write_reg(0x39, 0xD0);
 
-    // 3. Format I2S 16-bit, MCLK = 256*Fs (Single Speed)
+    // 3. I2S Slave Mode 16-bit Philips, Single Speed 256*Fs
+    es8388_write_reg(0x08, 0x00); // MASTERMODE: Slave Mode (ESP32-C3 cap MCLK, BCLK, WS)
+    es8388_write_reg(0x00, 0x12); // CONTROL1: SameFs=1, VMIDSEL=10 (500k normal, chuan esp-adf)
+    es8388_write_reg(0x03, 0xFF); // ADCPOWER: Power down ADC (chi dung DAC phat nhac)
     es8388_write_reg(0x17, 0x18); // DACCONTROL1: 16-bit Philips I2S
-    es8388_write_reg(0x18, 0x02); // DACCONTROL2: 256*Fs
+    es8388_write_reg(0x18, 0x02); // DACCONTROL2: 256*Fs Single Speed
 
-    // 4. Dinh tuyen DAC -> Output Mixer
+    // 4. Dinh tuyen DAC -> Output Mixer (chi lay DAC, tat bypass analog)
     es8388_write_reg(0x26, 0x00); // DACCONTROL16
     es8388_write_reg(0x27, 0x90); // DACCONTROL17: Left DAC -> Left Mixer (0dB)
     es8388_write_reg(0x2A, 0x90); // DACCONTROL20: Right DAC -> Right Mixer (0dB)
+    es8388_write_reg(0x2B, 0x80); // DACCONTROL21: slrck=1 (ADC & DAC dung chung LRCK)
+    es8388_write_reg(0x2D, 0x00); // DACCONTROL23: VROI = 0
 
-    // 5. Khoi dau o muc an toan -18dB (0x12) de khong bao gio bi re PAM8403
-    es8388_write_reg(0x2E, 0x12); // LOUT1VOL (-18dB)
-    es8388_write_reg(0x2F, 0x12); // ROUT1VOL (-18dB)
-    es8388_write_reg(0x30, 0x12); // LOUT2VOL (-18dB)
-    es8388_write_reg(0x31, 0x12); // ROUT2VOL (-18dB)
-    es8388_write_reg(0x1A, 0x00); // Left Digital Volume = 0dB
-    es8388_write_reg(0x1B, 0x00); // Right Digital Volume = 0dB
+    // 5. Khoi dong lai State Machine SAU khi cau hinh 0x2B (chuan es8388_start trong esp-adf)
+    es8388_write_reg(0x02, 0xF0);
+    es8388_write_reg(0x02, 0x00);
 
-    // 6. Bat State Machine & cho VMID nap on dinh 150ms ROI MOI MO OUT1/OUT2 & Unmute
-    es8388_write_reg(0x02, 0x00); // Power UP khoi DAC & DLL
+    // 6. Muc analog -12dB (0x16) giu tin hieu sach truoc tang PAM8403 24dB tren nguon 3.2V
+    es8388_write_reg(0x1A, 0x00); // DACCONTROL4: Left Digital Volume = 0dB
+    es8388_write_reg(0x1B, 0x00); // DACCONTROL5: Right Digital Volume = 0dB
+    es8388_write_reg(0x2E, 0x16); // LOUT1VOL (-12dB)
+    es8388_write_reg(0x2F, 0x16); // ROUT1VOL (-12dB)
+    es8388_write_reg(0x30, 0x16); // LOUT2VOL (-12dB)
+    es8388_write_reg(0x31, 0x16); // ROUT2VOL (-12dB)
+
+    // 7. Cho tu VMID nap on dinh 150ms ROI MOI MO OUT1/OUT2 & Unmute
     vTaskDelay(pdMS_TO_TICKS(150));
-    es8388_write_reg(0x00, 0x16); // SameFs=1, EnRef=1, VMIDSEL=10 (500k normal mode)
     es8388_write_reg(0x04, 0x3C); // DAC L/R ON + OUT1/OUT2 ON
     es8388_write_reg(0x19, 0x00); // Unmute DAC!
 
-    // 7. Doc nguoc thanh ghi de xac minh ES8388
-    uint8_t r00 = 0, r01 = 0, r02 = 0, r04 = 0, r17 = 0, r18 = 0, r19 = 0, r27 = 0, r2b = 0, r2e = 0, r30 = 0;
+    // 8. Doc nguoc thanh ghi de xac minh ES8388
+    uint8_t r00 = 0, r01 = 0, r02 = 0, r04 = 0, r17 = 0, r18 = 0, r19 = 0, r27 = 0, r2b = 0, r2e = 0, r30 = 0, r35 = 0;
     es8388_read_reg(0x00, &r00);
     es8388_read_reg(0x01, &r01);
     es8388_read_reg(0x02, &r02);
@@ -454,8 +459,9 @@ static bool init_es8388(void) {
     es8388_read_reg(0x2B, &r2b);
     es8388_read_reg(0x2E, &r2e);
     es8388_read_reg(0x30, &r30);
-    LOG_DIRECT("[ES8388] Doc lai: R00=0x%02X R01=0x%02X R02=0x%02X R04=0x%02X R17=0x%02X R18=0x%02X R19=0x%02X R27=0x%02X R2B=0x%02X OUT1=0x%02X OUT2=0x%02X\r\n",
-               r00, r01, r02, r04, r17, r18, r19, r27, r2b, r2e, r30);
+    es8388_read_reg(0x35, &r35);
+    LOG_DIRECT("[ES8388] Doc lai: R00=0x%02X R01=0x%02X R02=0x%02X R04=0x%02X R17=0x%02X R18=0x%02X R19=0x%02X R27=0x%02X R2B=0x%02X OUT1=0x%02X OUT2=0x%02X R35=0x%02X\r\n",
+               r00, r01, r02, r04, r17, r18, r19, r27, r2b, r2e, r30, r35);
 
     if (r04 != 0x3C || r17 != 0x18) {
         LOG_DIRECT("[ES8388] LOI: Thanh ghi khong khop (I2C sai dia chi 0x%02X?), se thu lai!\r\n", s_es8388_addr);
@@ -481,18 +487,10 @@ static void check_es8388_health(const char *tag) {
         return;
     }
     LOG_DIRECT("[ES8388 Health @%s] R00=0x%02X R02=0x%02X R04=0x%02X R19=0x%02X\r\n", tag, r00, r02, r04, r19);
-    if (r04 != 0x3C || (r00 & 0x06) == 0 || r19 != 0x00) {
+    if (r04 != 0x3C || (r00 & 0x03) == 0 || r19 != 0x00) {
         LOG_DIRECT("[ES8388] CANH BAO: Chip bi reset/sut ap! Dang khoi tao lai...\r\n");
         init_es8388();
     }
-}
-
-static void es8388_set_out_vol(uint8_t vol_reg) {
-    if (!s_es8388_ready) return;
-    es8388_write_reg(0x2E, vol_reg);
-    es8388_write_reg(0x2F, vol_reg);
-    es8388_write_reg(0x30, vol_reg);
-    es8388_write_reg(0x31, vol_reg);
 }
 
 
@@ -546,12 +544,12 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
     int total_samples = (I2S_SAMPLE_RATE * duration_ms) / 1000;
     int16_t buf[128 * 2];
     uint32_t phase = 0;
-    uint32_t phase_step = ((uint32_t)freq * 256 * 256) / I2S_SAMPLE_RATE;
+    uint32_t phase_step = (uint32_t)(((uint64_t)freq * 65536ULL) / I2S_SAMPLE_RATE);
 
-    // Bien do ~2/3 (~14000-17000) ket hop -1.5dB analog -> am thanh to, trong, khong meo tieng
-    int32_t safe_vol = ((int32_t)volume * 2) / 3;
-    int attack_len = I2S_SAMPLE_RATE / 120; // ~8ms fade-in muot
-    int decay_len  = I2S_SAMPLE_RATE / 60;  // ~16ms fade-out muot
+    if (volume > 14000) volume = 14000;
+    int32_t safe_vol = (int32_t)volume;
+    int attack_len = I2S_SAMPLE_RATE / 100; // ~10ms fade-in
+    int decay_len  = I2S_SAMPLE_RATE / 65;  // ~15ms fade-out
     if (attack_len > total_samples / 8) attack_len = total_samples / 8;
     if (decay_len > total_samples / 4)  decay_len  = total_samples / 4;
 
@@ -584,40 +582,42 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
 }
 
 static void play_startup_jingle(void) {
-    // Chi phat not nhac thuan khiet (Do-Re-Mi-Fa-Sol-La-Si-Do) o muc sach khong re
-    const uint16_t scale[] = {523, 587, 659, 698, 784, 880, 988, 1046};
-    for (int i = 0; i < 8; i++) {
-        play_tone(scale[i], 280, 18000);
-        play_silence(60);
+    // Arpeggio sach: Do-Mi-Sol-Do (C5-E5-G5-C6)
+    const uint16_t notes[] = {523, 659, 784, 1046};
+    const uint16_t durs[]  = {200, 180, 180, 350};
+    for (int i = 0; i < 4; i++) {
+        play_tone(notes[i], durs[i], 9500);
+        play_silence(50);
     }
 }
 
 static void play_digit_ding(void) {
     static const uint16_t pentatonic[] = {523, 587, 659, 784, 880, 1046};
     static uint8_t idx = 0;
-    play_tone(pentatonic[idx % 6], 75, 18000);
+    play_tone(pentatonic[idx % 6], 75, 9500);
     idx++;
 }
 
 static void play_heartbeat_sfx(void) {
-    play_tone(150, 90, 26000);
+    // Giu bien do <= 9500 de tranh clip PAM8403 tren nguon 3.2V
+    play_tone(150, 90, 9500);
     play_silence(60);
-    play_tone(110, 110, 22000);
+    play_tone(110, 110, 9000);
 }
 
 static void play_smiley_sfx(void) {
     for (int f = 600; f <= 1200; f += 75) {
-        play_tone(f, 20, 20000);
+        play_tone(f, 20, 9500);
     }
 }
 
 static void play_pacman_sfx(void) {
     for (int cycle = 0; cycle < 3; cycle++) {
         for (int f = 380; f <= 750; f += 65) {
-            play_tone(f, 12, 22000);
+            play_tone(f, 12, 9500);
         }
         for (int f = 750; f >= 380; f -= 65) {
-            play_tone(f, 12, 22000);
+            play_tone(f, 12, 9500);
         }
     }
 }
@@ -656,7 +656,7 @@ static void play_equalizer_melody(void) {
     const uint16_t notes[] = {659, 659, 698, 784, 784, 698, 659, 587, 523, 523, 587, 659, 659, 587, 587};
     const uint16_t durs[]  = {240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 340, 140, 440};
     for (int i = 0; i < 15; i++) {
-        play_tone(notes[i], durs[i], 18000);
+        play_tone(notes[i], durs[i], 9500);
         play_silence(40);
     }
 }
@@ -691,24 +691,18 @@ static void play_fire_crackles(void) {
 
 static void audio_task(void *pvParameters) {
     sound_effect_t sfx;
-    uint32_t sfx_count = 0;
     while (1) {
         if (xQueueReceive(s_sound_queue, &sfx, portMAX_DELAY) == pdTRUE) {
-            if (sfx != SOUND_STARTUP && sfx != SOUND_EQUALIZER) {
-                // Bo qua cac hieu ung tieng dong khac, chi phat not nhac sach
-                continue;
-            }
-            sfx_count++;
-            if (sfx_count <= 5) {
-                LOG_DIRECT("[AUDIO] Dang phat not nhac #%d (count=%lu)...\r\n", (int)sfx, (unsigned long)sfx_count);
-            }
             switch (sfx) {
-                case SOUND_STARTUP:   play_startup_jingle(); break;
+                case SOUND_STARTUP:   play_startup_jingle();  break;
+                case SOUND_DIGIT:     play_digit_ding();      break;
+                case SOUND_HEARTBEAT: play_heartbeat_sfx();   break;
+                case SOUND_SMILEY:    play_smiley_sfx();      break;
+                case SOUND_PACMAN:    play_pacman_sfx();      break;
+                case SOUND_THUNDER:   play_thunder_sfx();     break;
                 case SOUND_EQUALIZER: play_equalizer_melody(); break;
+                case SOUND_FIRE:      play_fire_crackles();   break;
                 default: break;
-            }
-            if (sfx_count <= 5) {
-                LOG_DIRECT("[AUDIO] Xong not nhac #%d (count=%lu)\r\n", (int)sfx, (unsigned long)sfx_count);
             }
         }
     }
@@ -1059,39 +1053,50 @@ static void display_task(void *pvParameters) {
                 continue;
             }
         }
-        if (s_i2c_ready || s_es8388_inited) {
 
-            // Test do nguong sach tieng theo 5 buoc ro rang:
-            // Buoc 0: LED TAT, OUT=0x16 (-12dB), vol=12000 (muc 2c6699f tung nghe sach)
-            // Buoc 1..4: Hien thi so 1..4 tren LED, tang dan am luong de tim nguong toi da khong re
-            const uint8_t out_regs[5]  = {0x16, 0x12, 0x16, 0x16, 0x17};
-            const int16_t dig_vols[5]  = {12000, 12000, 12000, 18000, 20000};
-            const uint16_t notes[4]    = {523, 659, 784, 1046};
-
-            for (int step = 0; step < 5; step++) {
-                fb_clear();
-                if (step == 1) draw_char('1', true, false, false);
-                if (step == 2) draw_char('2', false, true, false);
-                if (step == 3) draw_char('3', true, true, false);
-                if (step == 4) draw_char('4', false, false, true);
-                fb_render();
-
-                es8388_set_out_vol(out_regs[step]);
-                vTaskDelay(pdMS_TO_TICKS(80));
-                LOG_DIRECT("[CAL] Buoc %d (%s): OUT=0x%02X vol=%d -> Phat C5-E5-G5-C6...\r\n",
-                           step, (step == 0) ? "LED TAT" : "LED SO", out_regs[step], dig_vols[step]);
-                for (int n = 0; n < 4; n++) {
-                    play_tone(notes[n], 240, dig_vols[step]);
-                    play_silence(50);
-                }
-                play_silence(300);
-                vTaskDelay(pdMS_TO_TICKS(600));
+        if (round == 0) {
+            fb_clear();
+            fb_render();
+            LOG_DIRECT("[CAL] LED TAT: 8 not C5..C6 vol=9500 (OUT=0x16, 48kHz, DLL off)\r\n");
+            const uint16_t scale8[] = {523, 587, 659, 698, 784, 880, 988, 1046};
+            for (int n = 0; n < 8; n++) {
+                play_tone(scale8[n], 280, 9500);
+                play_silence(60);
             }
-
-            round++;
-            check_es8388_health("AfterCal");
-            LOG_DIRECT(">>> Hoan thanh vong test am luong thu: %lu <<<\r\n", (unsigned long)round);
+            play_silence(400);
         }
+
+        round++;
+        LOG_DIRECT(">>> KIEM TRA AM THANH VONG %lu <<<\r\n", (unsigned long)round);
+
+        struct CalLevel {
+            char label;
+            bool r, g, b;
+            int16_t vol;
+            const char *desc;
+        };
+        static const CalLevel levels[] = {
+            {'1', false, true,  false,  8500, "Xanh la"},
+            {'2', true,  true,  false, 10500, "Vang"},
+            {'3', false, false, true,  12500, "Xanh duong"},
+        };
+        static const uint16_t chord4[] = {523, 659, 784, 1046};
+
+        for (int s = 0; s < 3; s++) {
+            fb_clear();
+            draw_char(levels[s].label, levels[s].r, levels[s].g, levels[s].b);
+            fb_render();
+            LOG_DIRECT("[CAL] Muc %c (%s): C5-E5-G5-C6 vol=%d (OUT=0x16, 48kHz)\r\n",
+                       levels[s].label, levels[s].desc, levels[s].vol);
+            for (int n = 0; n < 4; n++) {
+                play_tone(chord4[n], 240, levels[s].vol);
+                play_silence(60);
+            }
+            play_silence(300);
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+
+        check_es8388_health("AfterCal");
     }
 }
 
