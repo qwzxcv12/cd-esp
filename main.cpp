@@ -94,7 +94,7 @@ static esp_err_t i2c_write_byte(uint8_t reg, uint8_t val) {
 static esp_err_t es8388_write_reg(uint8_t reg, uint8_t val) {
     if (!s_es8388_ready) return ESP_FAIL;
     uint8_t buf[2] = {reg, val};
-    esp_err_t err = i2c_master_write_to_device(I2C_PORT_NUM, s_es8388_addr, buf, 2, pdMS_TO_TICKS(20));
+    esp_err_t err = i2c_master_write_to_device(I2C_PORT_NUM, s_es8388_addr, buf, 2, pdMS_TO_TICKS(50));
     if (err != ESP_OK) {
         LOG_DIRECT("[ES8388] Loi ghi thanh ghi 0x%02X=0x%02X (%s)\r\n", reg, val, esp_err_to_name(err));
     }
@@ -103,7 +103,7 @@ static esp_err_t es8388_write_reg(uint8_t reg, uint8_t val) {
 
 static esp_err_t es8388_read_reg(uint8_t reg, uint8_t *val) {
     if (!s_es8388_ready || !val) return ESP_FAIL;
-    return i2c_master_write_read_device(I2C_PORT_NUM, s_es8388_addr, &reg, 1, val, 1, pdMS_TO_TICKS(20));
+    return i2c_master_write_read_device(I2C_PORT_NUM, s_es8388_addr, &reg, 1, val, 1, pdMS_TO_TICKS(50));
 }
 
 static inline void cs_select(uint8_t ic_idx) {
@@ -424,11 +424,11 @@ static bool init_es8388(void) {
     es8388_write_reg(0x27, 0x90); // DACCONTROL17: Left DAC -> Left Mixer (0dB)
     es8388_write_reg(0x2A, 0x90); // DACCONTROL20: Right DAC -> Right Mixer (0dB)
 
-    // 5. Dat muc analog -1.5dB (0x1D) de am thanh to ro rang ma khong bao hoa PAM8403
-    es8388_write_reg(0x2E, 0x1D); // LOUT1VOL (-1.5dB)
-    es8388_write_reg(0x2F, 0x1D); // ROUT1VOL (-1.5dB)
-    es8388_write_reg(0x30, 0x1D); // LOUT2VOL (-1.5dB)
-    es8388_write_reg(0x31, 0x1D); // ROUT2VOL (-1.5dB)
+    // 5. Dat muc analog -9dB (0x18) vua du nghe ro ma khong gay re/bao hoa PAM8403
+    es8388_write_reg(0x2E, 0x18); // LOUT1VOL (-9dB)
+    es8388_write_reg(0x2F, 0x18); // ROUT1VOL (-9dB)
+    es8388_write_reg(0x30, 0x18); // LOUT2VOL (-9dB)
+    es8388_write_reg(0x31, 0x18); // ROUT2VOL (-9dB)
     es8388_write_reg(0x1A, 0x00); // Left Digital Volume = 0dB
     es8388_write_reg(0x1B, 0x00); // Right Digital Volume = 0dB
 
@@ -574,13 +574,12 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
 }
 
 static void play_startup_jingle(void) {
-    play_tone(523, 100, 22000);  // C5
-    play_silence(25);
-    play_tone(659, 100, 22000);  // E5
-    play_silence(25);
-    play_tone(784, 100, 22000);  // G5
-    play_silence(25);
-    play_tone(1046, 260, 24000); // C6
+    // Chi phat not nhac thuan khiet (Do-Re-Mi-Fa-Sol-La-Si-Do) o muc sach khong re
+    const uint16_t scale[] = {523, 587, 659, 698, 784, 880, 988, 1046};
+    for (int i = 0; i < 8; i++) {
+        play_tone(scale[i], 280, 18000);
+        play_silence(60);
+    }
 }
 
 static void play_digit_ding(void) {
@@ -643,10 +642,12 @@ static void play_thunder_sfx(void) {
 }
 
 static void play_equalizer_melody(void) {
-    uint16_t notes[] = {330, 392, 440, 523, 440, 392, 330, 262};
-    for (int i = 0; i < 8; i++) {
-        play_tone(notes[i], 100, 22000);
-        play_silence(20);
+    // Giai dieu not nhac sach: Ode to Joy
+    const uint16_t notes[] = {659, 659, 698, 784, 784, 698, 659, 587, 523, 523, 587, 659, 659, 587, 587};
+    const uint16_t durs[]  = {240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 240, 340, 140, 440};
+    for (int i = 0; i < 15; i++) {
+        play_tone(notes[i], durs[i], 18000);
+        play_silence(40);
     }
 }
 
@@ -683,23 +684,21 @@ static void audio_task(void *pvParameters) {
     uint32_t sfx_count = 0;
     while (1) {
         if (xQueueReceive(s_sound_queue, &sfx, portMAX_DELAY) == pdTRUE) {
+            if (sfx != SOUND_STARTUP && sfx != SOUND_EQUALIZER) {
+                // Bo qua cac hieu ung tieng dong khac, chi phat not nhac sach
+                continue;
+            }
             sfx_count++;
             if (sfx_count <= 5) {
-                LOG_DIRECT("[AUDIO] Dang phat hieu ung #%d (count=%lu)...\r\n", (int)sfx, (unsigned long)sfx_count);
+                LOG_DIRECT("[AUDIO] Dang phat not nhac #%d (count=%lu)...\r\n", (int)sfx, (unsigned long)sfx_count);
             }
             switch (sfx) {
                 case SOUND_STARTUP:   play_startup_jingle(); break;
-                case SOUND_DIGIT:     play_digit_ding(); break;
-                case SOUND_HEARTBEAT: play_heartbeat_sfx(); break;
-                case SOUND_SMILEY:    play_smiley_sfx(); break;
-                case SOUND_PACMAN:    play_pacman_sfx(); break;
-                case SOUND_THUNDER:   play_thunder_sfx(); break;
                 case SOUND_EQUALIZER: play_equalizer_melody(); break;
-                case SOUND_FIRE:      play_fire_crackles(); break;
                 default: break;
             }
             if (sfx_count <= 5) {
-                LOG_DIRECT("[AUDIO] Xong hieu ung #%d (count=%lu)\r\n", (int)sfx, (unsigned long)sfx_count);
+                LOG_DIRECT("[AUDIO] Xong not nhac #%d (count=%lu)\r\n", (int)sfx, (unsigned long)sfx_count);
             }
         }
     }
@@ -756,7 +755,6 @@ static void test_full_colors(void) {
 
     fb_clear();
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) draw_pixel(x, y, true, false, false);
-    trigger_sound(SOUND_STARTUP);
     fb_render(); vTaskDelay(pdMS_TO_TICKS(1000));
 
     fb_clear();
@@ -1019,9 +1017,18 @@ static void display_task(void *pvParameters) {
         LOG_DIRECT("=== KHOI TAO HT16D35A THANH CONG! ===\r\n");
     }
 
-    // Khởi tạo I2S và DAC ES8388
+    // Khởi tạo I2S và DAC ES8388 (cho 50ms on dinh MCLK truoc khi ghi I2C)
     init_i2s();
-    init_es8388();
+    vTaskDelay(pdMS_TO_TICKS(50));
+    if (!init_es8388()) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        init_es8388();
+    }
+
+    // Chi phat 8 not nhac sach luc tat ca LED dang tat (de nghe phan biet khong re)
+    LOG_DIRECT("[AUDIO] Phat 8 not nhac sach Do-Re-Mi-Fa-Sol-La-Si-Do (LED tat)...\r\n");
+    trigger_sound(SOUND_STARTUP);
+    vTaskDelay(pdMS_TO_TICKS(3000));
 
     uint32_t round = 0;
     while (1) {
