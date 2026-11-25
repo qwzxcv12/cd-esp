@@ -16,6 +16,7 @@
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/i2s_std.h"
+#include "driver/ledc.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "font16x16.h"
@@ -48,6 +49,7 @@ static uint8_t s_port0_state = 0xFF;
 static uint8_t s_es8388_addr = 0x10;
 static bool s_es8388_ready = false;
 static bool s_es8388_inited = false;
+static gpio_num_t s_mclk_pin = PIN_I2S_MCLK;
 
 static i2s_chan_handle_t s_tx_handle = NULL;
 static uint8_t fb[NUM_ICS][NUM_ROWS_PER_IC];
@@ -308,11 +310,113 @@ init_chip:
 // ============================================================================
 // BỘ ĐIỀU KHIỂN ÂM THANH ES8388 & I2S MASTER
 // ============================================================================
+static bool test_mclk_on_gpio(gpio_num_t mclk_gpio, int *out_bclk_edges, int *out_ws_edges) {
+    gpio_reset_pin(PIN_I2S_BCLK);
+    gpio_reset_pin(PIN_I2S_WS);
+    gpio_set_direction(PIN_I2S_BCLK, GPIO_MODE_INPUT);
+    gpio_set_direction(PIN_I2S_WS, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_I2S_BCLK, GPIO_PULLDOWN_ONLY);
+    gpio_set_pull_mode(PIN_I2S_WS, GPIO_PULLDOWN_ONLY);
+
+    if (mclk_gpio != PIN_DIO) {
+        gpio_reset_pin(mclk_gpio);
+        gpio_set_direction(mclk_gpio, GPIO_MODE_INPUT);
+        gpio_set_pull_mode(mclk_gpio, GPIO_PULLUP_ONLY);
+        delay_us(50);
+        if (gpio_get_level(mclk_gpio) == 0) {
+            LOG_DIRECT("  [Probe MCLK] Bo qua GPIO %d (bi keo xuong GND)\r\n", mclk_gpio);
+            return false;
+        }
+    }
+
+    ledc_timer_config_t timer_conf = {};
+    timer_conf.speed_mode      = LEDC_LOW_SPEED_MODE;
+    timer_conf.duty_resolution = LEDC_TIMER_2_BIT;
+    timer_conf.timer_num       = LEDC_TIMER_0;
+    timer_conf.freq_hz         = 1000000; // 1 MHz
+    timer_conf.clk_cfg         = LEDC_AUTO_CLK;
+    if (ledc_timer_config(&timer_conf) != ESP_OK) return false;
+
+    ledc_channel_config_t ch_conf = {};
+    ch_conf.gpio_num   = mclk_gpio;
+    ch_conf.speed_mode = LEDC_LOW_SPEED_MODE;
+    ch_conf.channel    = LEDC_CHANNEL_0;
+    ch_conf.intr_type  = LEDC_INTR_DISABLE;
+    ch_conf.timer_sel  = LEDC_TIMER_0;
+    ch_conf.duty       = 2; // 50% duty
+    ch_conf.hpoint     = 0;
+    if (ledc_channel_config(&ch_conf) != ESP_OK) return false;
+
+    vTaskDelay(pdMS_TO_TICKS(5));
+
+    int bclk_edges = 0, ws_edges = 0;
+    int last_b = gpio_get_level(PIN_I2S_BCLK);
+    int last_w = gpio_get_level(PIN_I2S_WS);
+    for (int i = 0; i < 25000; i++) {
+        int b = gpio_get_level(PIN_I2S_BCLK);
+        int w = gpio_get_level(PIN_I2S_WS);
+        if (b != last_b) { bclk_edges++; last_b = b; }
+        if (w != last_w) { ws_edges++;   last_w = w; }
+    }
+
+    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+    gpio_reset_pin(mclk_gpio);
+
+    *out_bclk_edges = bclk_edges;
+    *out_ws_edges = ws_edges;
+    return (bclk_edges > 10 || ws_edges > 4);
+}
+
+static void probe_es8388_clocks(void) {
+    if (!s_es8388_ready) return;
+    LOG_DIRECT("[Probe ES8388] Dang thu che do Master Mode de do chan MCLK/SCLK/LRCK...\r\n");
+
+    // Dat ES8388 tam thoi sang Master Mode (0x08=0x8A: MSC=1, BCLK=MCLK/16)
+    es8388_write_reg(0x02, 0xF3);
+    es8388_write_reg(0x00, 0x16);
+    es8388_write_reg(0x01, 0x40);
+    es8388_write_reg(0x03, 0x00);
+    es8388_write_reg(0x0D, 0x02); // ADCFsRatio = 256Fs
+    es8388_write_reg(0x18, 0x02); // DACFsRatio = 256Fs
+    es8388_write_reg(0x2B, 0x80);
+    es8388_write_reg(0x08, 0x8A); // MSC=1 (Master), BCLKDIV=10 (MCLK/16)
+    es8388_write_reg(0x02, 0x00); // Power UP DLL & clocks
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    gpio_num_t candidates[] = {GPIO_NUM_8, GPIO_NUM_2, GPIO_NUM_3, GPIO_NUM_4, GPIO_NUM_10, GPIO_NUM_0};
+    gpio_num_t found_mclk = GPIO_NUM_NC;
+
+    for (size_t idx = 0; idx < sizeof(candidates) / sizeof(candidates[0]); idx++) {
+        gpio_num_t g = candidates[idx];
+        int b_edges = 0, w_edges = 0;
+        bool ok = test_mclk_on_gpio(g, &b_edges, &w_edges);
+        LOG_DIRECT("  [Probe MCLK] GPIO %2d -> SCLK_edges=%5d, LRCK_edges=%4d %s\r\n",
+                   g, b_edges, w_edges, ok ? "<== KHOP!" : "");
+        if (ok && found_mclk == GPIO_NUM_NC && g != PIN_DIO) {
+            found_mclk = g;
+        }
+    }
+
+    // Khoi phuc lai PIN_DIO (GPIO 0) cho LED
+    gpio_reset_pin(PIN_DIO);
+    gpio_set_direction(PIN_DIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_DIO, 0);
+
+    // Tra ES8388 ve Slave Mode
+    es8388_write_reg(0x08, 0x00);
+    if (found_mclk != GPIO_NUM_NC) {
+        s_mclk_pin = found_mclk;
+        LOG_DIRECT("[Probe ES8388] >>> XAC NHAN CHAN MCLK LA GPIO %d! <<<\r\n", s_mclk_pin);
+    } else {
+        LOG_DIRECT("[Probe ES8388] >>> CANH BAO: Khong thay xung BCLK/LRCK tra ve! Kiem tra han chan 1/5/7! <<<\r\n");
+    }
+}
+
 static bool init_i2s(void) {
     LOG_DIRECT("[I2S] Dang khoi tao I2S Master (MCLK=%d, BCLK=%d, DOUT=%d, WS=%d, Rate=%dHz)...\r\n",
-               PIN_I2S_MCLK, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS, I2S_SAMPLE_RATE);
+               s_mclk_pin, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS, I2S_SAMPLE_RATE);
 
-    gpio_reset_pin(PIN_I2S_MCLK);
+    gpio_reset_pin(s_mclk_pin);
     gpio_reset_pin(PIN_I2S_BCLK);
     gpio_reset_pin(PIN_I2S_DOUT);
     gpio_reset_pin(PIN_I2S_WS);
@@ -333,7 +437,7 @@ static bool init_i2s(void) {
         },
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
-            .mclk = PIN_I2S_MCLK,
+            .mclk = s_mclk_pin,
             .bclk = PIN_I2S_BCLK,
             .ws   = PIN_I2S_WS,
             .dout = PIN_I2S_DOUT,
@@ -385,14 +489,15 @@ static bool init_es8388(void) {
         return false;
     }
 
-    LOG_DIRECT("[ES8388] Khoi tao chip DAC tai dia chi 0x%02X (Chong pop & am luong em tai)...\r\n", s_es8388_addr);
+    LOG_DIRECT("[ES8388] Khoi tao chip DAC tai dia chi 0x%02X...\r\n", s_es8388_addr);
 
-    // 1. Mute & tat dau ra truoc khi nap dien tu VMID (tranh tieng bup/choi luc khoi dong)
+    // 1. Mute & tat dau ra truoc khi nap dien tu VMID
     es8388_write_reg(0x19, 0x04); // Mute DAC
     es8388_write_reg(0x04, 0xC0); // Tam tat ca DAC & OUT1/OUT2
     es8388_write_reg(0x02, 0xF3); // Reset / stop ADC & DAC state machines
     es8388_write_reg(0x08, 0x00); // I2S Slave Mode (ESP32 cap MCLK, BCLK, LRCK)
     es8388_write_reg(0x2B, 0x80); // DACCONTROL21: slrck=1 (ADC & DAC dung chung LRCK)
+    es8388_write_reg(0x2D, 0x00); // DACCONTROL23: VROI = 0
 
     // 2. Bat nguon tham chieu VMID / EnRef & Ibias
     es8388_write_reg(0x00, 0x05); // EnRef=1, VMIDSEL=01 (50k nap nhanh tu VMID)
@@ -409,11 +514,11 @@ static bool init_es8388(void) {
     es8388_write_reg(0x27, 0x90); // DACCONTROL17: Left DAC -> Left Mixer (0dB)
     es8388_write_reg(0x2A, 0x90); // DACCONTROL20: Right DAC -> Right Mixer (0dB)
 
-    // 5. Dat Volume muc em tai (-9dB = 0x18) de tranh qua tai/meo choi vao PAM8403
-    es8388_write_reg(0x2E, 0x18); // LOUT1VOL (-9dB)
-    es8388_write_reg(0x2F, 0x18); // ROUT1VOL (-9dB)
-    es8388_write_reg(0x30, 0x18); // LOUT2VOL (-9dB)
-    es8388_write_reg(0x31, 0x18); // ROUT2VOL (-9dB)
+    // 5. Dat Volume muc ro rang (-3dB = 0x1C)
+    es8388_write_reg(0x2E, 0x1C); // LOUT1VOL (-3dB)
+    es8388_write_reg(0x2F, 0x1C); // ROUT1VOL (-3dB)
+    es8388_write_reg(0x30, 0x1C); // LOUT2VOL (-3dB)
+    es8388_write_reg(0x31, 0x1C); // ROUT2VOL (-3dB)
     es8388_write_reg(0x1A, 0x00); // Left Digital Volume = 0dB
     es8388_write_reg(0x1B, 0x00); // Right Digital Volume = 0dB
 
@@ -440,7 +545,7 @@ static bool init_es8388(void) {
                r00, r01, r02, r04, r17, r19, r27, r2b, r2e, r30);
 
     s_es8388_inited = true;
-    LOG_DIRECT("[ES8388] Khoi tao thanh cong! Em tai, khong pop, san sang phat nhac.\r\n");
+    LOG_DIRECT("[ES8388] Khoi tao thanh cong!\r\n");
     return true;
 }
 
@@ -497,8 +602,8 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
     uint32_t phase = 0;
     uint32_t phase_step = ((uint32_t)freq * 256 * 256) / I2S_SAMPLE_RATE;
 
-    // Giam bien do xuong 1/3 de tranh qua tai PAM8403 (khong bi re choi)
-    int32_t safe_vol = volume / 3;
+    // Giam bien do xuong 1/2 (~12000) de am thanh ro rang ma khong bi meo choi
+    int32_t safe_vol = volume / 2;
     int attack_len = I2S_SAMPLE_RATE / 200; // 5ms
     int decay_len  = I2S_SAMPLE_RATE / 100; // 10ms
 
@@ -521,7 +626,11 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
             phase += phase_step;
         }
         size_t written = 0;
-        i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, pdMS_TO_TICKS(100));
+        esp_err_t werr = i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, pdMS_TO_TICKS(100));
+        if (werr != ESP_OK) {
+            LOG_DIRECT("[AUDIO] Loi I2S write: %s\r\n", esp_err_to_name(werr));
+            break;
+        }
         samples_left -= chunk;
     }
 }
@@ -622,8 +731,13 @@ static void play_fire_crackles(void) {
 
 static void audio_task(void *pvParameters) {
     sound_effect_t sfx;
+    uint32_t sfx_count = 0;
     while (1) {
         if (xQueueReceive(s_sound_queue, &sfx, portMAX_DELAY) == pdTRUE) {
+            sfx_count++;
+            if (sfx_count <= 5) {
+                LOG_DIRECT("[AUDIO] Dang phat hieu ung #%d (count=%lu)...\r\n", (int)sfx, (unsigned long)sfx_count);
+            }
             switch (sfx) {
                 case SOUND_STARTUP:   play_startup_jingle(); break;
                 case SOUND_DIGIT:     play_digit_ding(); break;
@@ -943,6 +1057,11 @@ static void anim_doom_fire(int duration_ms) {
 static void display_task(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(500));
     scan_and_init_i2c();
+
+    // Do chan MCLK/SCLK/LRCK thuc te qua che do Master Mode cua ES8388
+    if (s_es8388_ready) {
+        probe_es8388_clocks();
+    }
 
     if (s_i2c_ready) {
         LOG_DIRECT("=== KHOI TAO 4 CHIP HT16D35A QUA PI4IOE5V6416 ===\r\n");
