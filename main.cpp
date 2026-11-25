@@ -345,8 +345,10 @@ static bool init_i2s(void) {
     // Kiem tra thuc te xem ES8388 co nhan duoc MCLK(GPIO8) va tra ve SCLK(GPIO5)/LRCK(GPIO7) hay khong
     if (s_es8388_ready) {
         es8388_write_reg(0x02, 0xF3);
-        es8388_write_reg(0x00, 0x16);
+        es8388_write_reg(0x00, 0x05); // Bat EnRef & 50k fast-charge VMID truoc khi test DLL/Master Mode
         es8388_write_reg(0x01, 0x00);
+        vTaskDelay(pdMS_TO_TICKS(150));
+        es8388_write_reg(0x00, 0x16);
         es8388_write_reg(0x03, 0x00); // Bat ADC core de Master Mode xuat clock
         es8388_write_reg(0x04, 0x00); // Bat DAC core (tat LOUT/ROUT de khong keu loa)
         es8388_write_reg(0x0D, 0x02); // ADC 256Fs
@@ -513,11 +515,11 @@ static bool init_es8388(void) {
     es8388_write_reg(0x27, 0x90); // DACCONTROL17: Left DAC -> Left Mixer (0dB)
     es8388_write_reg(0x2A, 0x90); // DACCONTROL20: Right DAC -> Right Mixer (0dB)
 
-    // 5. Dat muc analog vua phai -9dB (0x18) de nghe ro nhung khong lam bao hoa PAM8403
-    es8388_write_reg(0x2E, 0x18); // LOUT1VOL (-9dB)
-    es8388_write_reg(0x2F, 0x18); // ROUT1VOL (-9dB)
-    es8388_write_reg(0x30, 0x18); // LOUT2VOL (-9dB)
-    es8388_write_reg(0x31, 0x18); // ROUT2VOL (-9dB)
+    // 5. Dat muc analog -12dB (0x16) de am nhac nghe ro net ma khong lam bao hoa PAM8403
+    es8388_write_reg(0x2E, 0x16); // LOUT1VOL (-12dB)
+    es8388_write_reg(0x2F, 0x16); // ROUT1VOL (-12dB)
+    es8388_write_reg(0x30, 0x16); // LOUT2VOL (-12dB)
+    es8388_write_reg(0x31, 0x16); // ROUT2VOL (-12dB)
     es8388_write_reg(0x1A, 0x00); // Left Digital Volume = 0dB
     es8388_write_reg(0x1B, 0x00); // Right Digital Volume = 0dB
 
@@ -655,14 +657,72 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
     }
 }
 
+static void play_music_note(uint16_t freq, uint16_t duration_ms, int16_t volume) {
+    if (!s_tx_handle || freq == 0 || duration_ms == 0) {
+        vTaskDelay(pdMS_TO_TICKS(duration_ms));
+        return;
+    }
+    int total_samples = (I2S_SAMPLE_RATE * duration_ms) / 1000;
+    if (total_samples < 16) total_samples = 16;
+    int16_t buf[128 * 2];
+    uint32_t phase = 0;
+    uint32_t phase_step = ((uint32_t)freq * 256 * 256) / I2S_SAMPLE_RATE;
+    int attack_len = I2S_SAMPLE_RATE / 250; // ~4ms
+    if (attack_len > total_samples / 8) attack_len = total_samples / 8;
+    if (attack_len < 1) attack_len = 1;
+
+    int32_t base_vol = ((int32_t)volume * 2) / 3;
+    int samples_left = total_samples;
+    while (samples_left > 0) {
+        int chunk = (samples_left > 128) ? 128 : samples_left;
+        for (int i = 0; i < chunk; i++) {
+            int pos = total_samples - samples_left + i;
+            int rem = samples_left - i;
+            int32_t env;
+            if (pos < attack_len) {
+                env = (base_vol * pos) / attack_len;
+            } else {
+                uint32_t r = (uint32_t)(rem >> 4);
+                uint32_t t = (uint32_t)(total_samples >> 4);
+                if (t == 0) t = 1;
+                env = (int32_t)(((int64_t)base_vol * r * r) / ((int64_t)t * t));
+            }
+            uint8_t idx1 = (phase >> 8) & 0xFF;
+            uint8_t idx2 = ((phase * 2) >> 8) & 0xFF;
+            uint8_t idx3 = ((phase * 3) >> 8) & 0xFF;
+            int32_t wave = ((int32_t)SINE_TABLE[idx1] * 70 +
+                            (int32_t)SINE_TABLE[idx2] * 22 +
+                            (int32_t)SINE_TABLE[idx3] * 8) / 100;
+            int16_t sample_val = (int16_t)((wave * env) >> 15);
+            buf[i * 2]     = sample_val;
+            buf[i * 2 + 1] = sample_val;
+            phase += phase_step;
+        }
+        size_t written = 0;
+        esp_err_t werr = i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, 1000);
+        if (werr != ESP_OK) {
+            LOG_DIRECT("[AUDIO] Loi I2S write: %s\r\n", esp_err_to_name(werr));
+            break;
+        }
+        samples_left -= chunk;
+    }
+}
+
 static void play_startup_jingle(void) {
-    play_tone(440, 1500, 18000); // Test 440Hz lien tuc 1.5s (de phan biet song sin that hay tieng tit roi rac)
-    play_silence(300);
-    play_tone(660, 1500, 18000); // Test 660Hz lien tuc 1.5s
+    // Am giai Do-Re-Mi-Fa-Sol-La-Si-Do am thanh kieu hop nhac (khong bi tieng "tit")
+    const uint16_t scale[] = {262, 294, 330, 349, 392, 440, 494, 523};
+    for (int i = 0; i < 7; i++) {
+        play_music_note(scale[i], 190, 22000);
+        play_silence(25);
+    }
+    play_music_note(scale[7], 480, 24000);
 }
 
 static void play_digit_ding(void) {
-    play_tone(392, 65, 14000); // G4 nhe nhang, khong choi tai
+    static const uint16_t pentatonic[] = {523, 587, 659, 784, 880, 1046};
+    static uint8_t idx = 0;
+    play_music_note(pentatonic[idx % 6], 110, 15000);
+    idx++;
 }
 
 static void play_heartbeat_sfx(void) {
@@ -1098,10 +1158,10 @@ static void display_task(void *pvParameters) {
     init_i2s();
     init_es8388();
 
-    // Phat test song sin lien tuc 440Hz (1.5s) -> 660Hz (1.5s) luc tat ca LED dang tat
-    LOG_DIRECT("[AUDIO] Test song sin lien tuc 440Hz (1.5s) + 660Hz (1.5s) luc LED tat...\r\n");
+    // Phat am giai Do-Re-Mi-Fa-Sol-La-Si-Do kieu hop nhac luc tat ca LED dang tat
+    LOG_DIRECT("[AUDIO] Test am giai Do-Re-Mi-Fa-Sol-La-Si-Do luc LED tat...\r\n");
     trigger_sound(SOUND_STARTUP);
-    vTaskDelay(pdMS_TO_TICKS(3600));
+    vTaskDelay(pdMS_TO_TICKS(2300));
 
     uint32_t round = 0;
     while (1) {
