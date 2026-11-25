@@ -47,6 +47,7 @@ static uint8_t s_port0_state = 0xFF;
 
 static uint8_t s_es8388_addr = 0x10;
 static bool s_es8388_ready = false;
+static bool s_es8388_inited = false;
 
 static i2s_chan_handle_t s_tx_handle = NULL;
 static uint8_t fb[NUM_ICS][NUM_ROWS_PER_IC];
@@ -91,7 +92,16 @@ static esp_err_t i2c_write_byte(uint8_t reg, uint8_t val) {
 static esp_err_t es8388_write_reg(uint8_t reg, uint8_t val) {
     if (!s_es8388_ready) return ESP_FAIL;
     uint8_t buf[2] = {reg, val};
-    return i2c_master_write_to_device(I2C_PORT_NUM, s_es8388_addr, buf, 2, pdMS_TO_TICKS(15));
+    esp_err_t err = i2c_master_write_to_device(I2C_PORT_NUM, s_es8388_addr, buf, 2, pdMS_TO_TICKS(20));
+    if (err != ESP_OK) {
+        LOG_DIRECT("[ES8388] Loi ghi thanh ghi 0x%02X=0x%02X (%s)\r\n", reg, val, esp_err_to_name(err));
+    }
+    return err;
+}
+
+static esp_err_t es8388_read_reg(uint8_t reg, uint8_t *val) {
+    if (!s_es8388_ready || !val) return ESP_FAIL;
+    return i2c_master_write_read_device(I2C_PORT_NUM, s_es8388_addr, &reg, 1, val, 1, pdMS_TO_TICKS(20));
 }
 
 static inline void cs_select(uint8_t ic_idx) {
@@ -277,6 +287,7 @@ static bool init_i2s(void) {
                PIN_I2S_MCLK, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS);
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan_cfg.auto_clear = true;
     esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, NULL);
     if (ret != ESP_OK) {
         LOG_DIRECT("[I2S] Loi tao channel: %s\r\n", esp_err_to_name(ret));
@@ -338,43 +349,61 @@ static bool init_es8388(void) {
 
     LOG_DIRECT("[ES8388] Khoi tao chip DAC tai dia chi 0x%02X...\r\n", s_es8388_addr);
 
-    // 1. Reset chip
-    es8388_write_reg(0x00, 0x80);
-    vTaskDelay(pdMS_TO_TICKS(15));
-    es8388_write_reg(0x00, 0x00);
+    // 1. Reset state machines & mute trong luc cau hinh
+    es8388_write_reg(0x19, 0x04); // Mute DAC tam thoi
+    es8388_write_reg(0x02, 0xF3); // Reset / stop ADC & DAC state machines
+    es8388_write_reg(0x08, 0x00); // I2S Slave Mode (ESP32 cap MCLK, BCLK, LRCK)
+    es8388_write_reg(0x2B, 0x80); // DACCONTROL21: slrck=1 (ADC & DAC dung chung LRCK)
 
-    // 2. Power On
-    es8388_write_reg(0x01, 0x58); // VMID / VREF on
-    es8388_write_reg(0x02, 0x00); // Digital power up
-    es8388_write_reg(0x03, 0xFF); // ADC off (playback only)
-    es8388_write_reg(0x04, 0x3C); // DAC on, OUT1 & OUT2 on
-    es8388_write_reg(0x07, 0x7C); // Analog reference
+    // 2. Bat nguon tham chieu VMID / EnRef & Ibias (CRITICAL FIX!)
+    // Reg 0x00 bit 2 = EnRef (1), bit 1:0 = VMIDSEL (01 = 50k nap nhanh tu VMID)
+    // Reg 0x01 bit 5 = PdnAna (0 = ON), bit 4 = PdnIbiasgen (0 = ON)
+    es8388_write_reg(0x00, 0x05);
+    es8388_write_reg(0x01, 0x40); // Power ON Analog & Ibias Generator!
+    es8388_write_reg(0x03, 0xFF); // Power down ADC (chi dung DAC phat nhac)
+    es8388_write_reg(0x04, 0x3C); // DAC L/R ON (bit7:6=00), LOUT1/ROUT1/LOUT2/ROUT2 ON (bit5:2=1111)
+    es8388_write_reg(0x07, 0x7C); // Analog voltage management default
 
-    // 3. I2S Slave Mode (ESP32 phat xung)
-    es8388_write_reg(0x08, 0x00);
+    // 3. Format I2S 16-bit, MCLK = 256*Fs (Single Speed)
+    es8388_write_reg(0x17, 0x18); // DACCONTROL1: 16-bit Philips I2S
+    es8388_write_reg(0x18, 0x02); // DACCONTROL2: 256*Fs
 
-    // 4. Format 16-bit, 256*Fs
-    es8388_write_reg(0x17, 0x18);
-    es8388_write_reg(0x18, 0x02);
+    // 4. Dinh tuyen DAC -> Output Mixer
+    es8388_write_reg(0x26, 0x00); // DACCONTROL16: Mixer input select
+    es8388_write_reg(0x27, 0x90); // DACCONTROL17: Left DAC -> Left Mixer (LD2LO=1, 0dB)
+    es8388_write_reg(0x2A, 0x90); // DACCONTROL20: Right DAC -> Right Mixer (RD2RO=1, 0dB)
 
-    // 5. Output Mixer
-    es8388_write_reg(0x26, 0x00);
-    es8388_write_reg(0x27, 0xB8); // Left DAC -> Left Mixer (0dB)
-    es8388_write_reg(0x2A, 0xB8); // Right DAC -> Right Mixer (0dB)
+    // 5. Mo Volume toi da (+4.5dB) cho ca OUT1 (Tai nghe) va OUT2 (Loa ngoai)
+    es8388_write_reg(0x2E, 0x21); // LOUT1VOL (+4.5dB)
+    es8388_write_reg(0x2F, 0x21); // ROUT1VOL (+4.5dB)
+    es8388_write_reg(0x30, 0x21); // LOUT2VOL (+4.5dB)
+    es8388_write_reg(0x31, 0x21); // ROUT2VOL (+4.5dB)
+    es8388_write_reg(0x1A, 0x00); // Left Digital Volume = 0dB (khong giam am)
+    es8388_write_reg(0x1B, 0x00); // Right Digital Volume = 0dB (khong giam am)
 
-    // 6. Mo Volume toi da (0dB) cho ca OUT1 va OUT2
-    es8388_write_reg(0x2E, 0x1E); // LOUT1
-    es8388_write_reg(0x2F, 0x1E); // ROUT1
-    es8388_write_reg(0x30, 0x1E); // LOUT2 (Loa ngoài)
-    es8388_write_reg(0x31, 0x1E); // ROUT2 (Loa ngoài)
-    es8388_write_reg(0x1A, 0x00); // Left Digital Volume (0dB)
-    es8388_write_reg(0x1B, 0x00); // Right Digital Volume (0dB)
+    // 6. Bat State Machine & DLL, cho tu VMID on dinh roi chuyen che do thuong & Unmute
+    es8388_write_reg(0x02, 0x00); // CHIPPOWER: Power UP toan bo khoi DAC & DLL
+    vTaskDelay(pdMS_TO_TICKS(100));
+    es8388_write_reg(0x00, 0x16); // SameFs=1, EnRef=1, VMIDSEL=10 (500k normal mode)
+    es8388_write_reg(0x19, 0x00); // DACCONTROL3: Unmute DAC!
 
-    // 7. Unmute & Enable DAC
-    es8388_write_reg(0x19, 0x00); // Unmute DAC
-    es8388_write_reg(0x2B, 0x80); // Enable DAC state machine
+    // 7. Doc nguoc thanh ghi de xac minh ES8388 da nhan cau hinh
+    uint8_t r00 = 0, r01 = 0, r02 = 0, r04 = 0, r17 = 0, r19 = 0, r27 = 0, r2b = 0, r2e = 0, r30 = 0;
+    es8388_read_reg(0x00, &r00);
+    es8388_read_reg(0x01, &r01);
+    es8388_read_reg(0x02, &r02);
+    es8388_read_reg(0x04, &r04);
+    es8388_read_reg(0x17, &r17);
+    es8388_read_reg(0x19, &r19);
+    es8388_read_reg(0x27, &r27);
+    es8388_read_reg(0x2B, &r2b);
+    es8388_read_reg(0x2E, &r2e);
+    es8388_read_reg(0x30, &r30);
+    LOG_DIRECT("[ES8388] Doc lai: R00=0x%02X R01=0x%02X R02=0x%02X R04=0x%02X R17=0x%02X R19=0x%02X R27=0x%02X R2B=0x%02X OUT1=0x%02X OUT2=0x%02X\r\n",
+               r00, r01, r02, r04, r17, r19, r27, r2b, r2e, r30);
 
-    LOG_DIRECT("[ES8388] Khoi tao thanh cong! DAC da bat va un-mute 100%.\r\n");
+    s_es8388_inited = true;
+    LOG_DIRECT("[ES8388] Khoi tao thanh cong! VMID/Ibias da bat & un-mute 100%%.\r\n");
     return true;
 }
 
@@ -601,18 +630,22 @@ static void test_full_colors(void) {
 
     fb_clear();
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) draw_pixel(x, y, true, false, false);
+    trigger_sound(SOUND_STARTUP);
     fb_render(); vTaskDelay(pdMS_TO_TICKS(1000));
 
     fb_clear();
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) draw_pixel(x, y, false, true, false);
+    trigger_sound(SOUND_DIGIT);
     fb_render(); vTaskDelay(pdMS_TO_TICKS(1000));
 
     fb_clear();
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) draw_pixel(x, y, false, false, true);
+    trigger_sound(SOUND_SMILEY);
     fb_render(); vTaskDelay(pdMS_TO_TICKS(1000));
 
     fb_clear();
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) draw_pixel(x, y, true, true, true);
+    trigger_sound(SOUND_EQUALIZER);
     fb_render(); vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
@@ -877,9 +910,15 @@ static void display_task(void *pvParameters) {
                     init_ht16d35a(i);
                     vTaskDelay(pdMS_TO_TICKS(30));
                 }
+                if (!s_es8388_inited) {
+                    init_es8388();
+                }
             }
             vTaskDelay(pdMS_TO_TICKS(2000));
         } else {
+            if (!s_es8388_inited) {
+                init_es8388();
+            }
             // 1. Test màu toàn màn hình (R, G, B, White)
             test_full_colors();
             fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
