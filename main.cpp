@@ -1,19 +1,8 @@
 /**
  * ============================================================================
- * TRÌNH DIỄN ĐỒ HỌA TOÀN DIỆN MA TRẬN 16x16 FULL RGB (ESP32-C3)
- * 4x HOLTEK HT16D35A + IC MỞ RỘNG PI4IOE5V6416 (TQFN-24)
- * ============================================================================
- * BAO GỒM ĐẦY ĐỦ CÁC BÀI TEST & HIỆU ỨNG ĐỈNH CAO:
- * 1. TEST MÀU TOÀN MÀN HÌNH: Đỏ -> Xanh lá -> Xanh dương -> Trắng
- * 2. CHẠY CHỮ SỐ 0 -> 9 ĐA SẮC MÀU (Font 16x16 sắc nét)
- * 3. CHẠY CHỮ CÁI TEST: E -> S -> P -> 3 -> 2 -> O -> K
- * 4. 6 HOẠT HÌNH PIXEL ART:
- *    - Trái tim đập (Beating Heart)
- *    - Mặt cười nháy mắt (Winking Smiley)
- *    - Pac-Man há mồm ăn kẹo (Pacman Retro)
- *    - Mây mưa rơi & Sấm chớp (Rain & Thunder)
- *    - Cột sóng âm nhạc (Audio Equalizer)
- *    - Ngọn lửa bập bùng (Doom Fire Effect)
+ * TRÌNH DIỄN ĐỒ HỌA MA TRẬN 16x16 FULL RGB + ÂM THANH RETRO ES8388 (ESP32-C3)
+ * - MÀN HÌNH: 4x HOLTEK HT16D35A + PI4IOE5V6416 (CLK=1, DIO=0, SDA=20, SCL=21)
+ * - ÂM THANH: EVEREST SEMI ES8388 DAC (MCLK=8, BCLK=5, DOUT=6, WS=7, I2C=20/21)
  * ============================================================================
  */
 
@@ -23,8 +12,10 @@
 #include <fcntl.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "driver/gpio.h"
 #include "driver/i2c.h"
+#include "driver/i2s_std.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "font16x16.h"
@@ -33,11 +24,16 @@
 #define PIN_CLK         GPIO_NUM_1
 #define PIN_DIO         GPIO_NUM_0
 
-// --- ĐÈN LED BO MẠCH ESP32-C3 ---
-#define PIN_LED_BOARD   GPIO_NUM_8
+// --- CẤU HÌNH I2S CHO ES8388 DAC ---
+#define PIN_I2S_MCLK    GPIO_NUM_8
+#define PIN_I2S_BCLK    GPIO_NUM_5
+#define PIN_I2S_DOUT    GPIO_NUM_6
+#define PIN_I2S_WS      GPIO_NUM_7
+#define I2S_SAMPLE_RATE 16000
 
+// --- I2C BUS CHUNG (PI4IOE5V6416 & ES8388) ---
 #define I2C_PORT_NUM    I2C_NUM_0
-#define I2C_FREQ_HZ     50000        // 50 kHz tốc độ chuẩn, chống nhiễu đường dài
+#define I2C_FREQ_HZ     50000
 
 #define NUM_ICS         4
 #define NUM_ROWS_PER_IC 28
@@ -49,20 +45,53 @@ static uint8_t s_i2c_addr = 0x20;
 static bool s_i2c_ready = false;
 static uint8_t s_port0_state = 0xFF;
 
-static uint8_t fb[NUM_ICS][NUM_ROWS_PER_IC];
+static uint8_t s_es8388_addr = 0x10;
+static bool s_es8388_ready = false;
 
-static inline void delay_us(uint32_t us) {
-    esp_rom_delay_us(us);
-}
+static i2s_chan_handle_t s_tx_handle = NULL;
+static uint8_t fb[NUM_ICS][NUM_ROWS_PER_IC];
 
 #define LOG_DIRECT(fmt, ...) do { \
     esp_rom_printf(fmt, ##__VA_ARGS__); \
 } while(0)
 
+static inline void delay_us(uint32_t us) {
+    esp_rom_delay_us(us);
+}
+
+// Bảng Sin 256 mẫu chuẩn 16-bit
+static const int16_t SINE_TABLE[256] = {
+    0, 804, 1607, 2410, 3211, 4011, 4807, 5601, 6392, 7179, 7961, 8739, 9511, 10278, 11038, 11792,
+    12539, 13278, 14009, 14732, 15446, 16150, 16845, 17530, 18204, 18867, 19519, 20159, 20787, 21402, 22004, 22594,
+    23169, 23731, 24278, 24811, 25329, 25831, 26318, 26789, 27244, 27683, 28105, 28510, 28897, 29268, 29621, 29955,
+    30272, 30571, 30851, 31113, 31356, 31580, 31785, 31970, 32137, 32284, 32412, 32520, 32609, 32678, 32727, 32757,
+    32767, 32757, 32727, 32678, 32609, 32520, 32412, 32284, 32137, 31970, 31785, 31580, 31356, 31113, 30851, 30571,
+    30272, 29955, 29621, 29268, 28897, 28510, 28105, 27683, 27244, 26789, 26318, 25831, 25329, 24811, 24278, 23731,
+    23169, 22594, 22004, 21402, 20787, 20159, 19519, 18867, 18204, 17530, 16845, 16150, 15446, 14732, 14009, 13278,
+    12539, 11792, 11038, 10278, 9511, 8739, 7961, 7179, 6392, 5601, 4807, 4011, 3211, 2410, 1607, 804,
+    0, -804, -1607, -2410, -3211, -4011, -4807, -5601, -6392, -7179, -7961, -8739, -9511, -10278, -11038, -11792,
+    -12539, -13278, -14009, -14732, -15446, -16150, -16845, -17530, -18204, -18867, -19519, -20159, -20787, -21402, -22004, -22594,
+    -23169, -23731, -24278, -24811, -25329, -25831, -26318, -26789, -27244, -27683, -28105, -28510, -28897, -29268, -29621, -29955,
+    -30272, -30571, -30851, -31113, -31356, -31580, -31785, -31970, -32137, -32284, -32412, -32520, -32609, -32678, -32727, -32757,
+    -32767, -32757, -32727, -32678, -32609, -32520, -32412, -32284, -32137, -31970, -31785, -31580, -31356, -31113, -30851, -30571,
+    -30272, -29955, -29621, -29268, -28897, -28510, -28105, -27683, -27244, -26789, -26318, -25831, -25329, -24811, -24278, -23731,
+    -23169, -22594, -22004, -21402, -20787, -20159, -19519, -18867, -18204, -17530, -16845, -16150, -15446, -14732, -14009, -13278,
+    -12539, -11792, -11038, -10278, -9511, -8739, -7961, -7179, -6392, -5601, -4807, -4011, -3211, -2410, -1607, -804
+};
+
+// ============================================================================
+// GIAO TIẾP I2C: PI4IOE5V6416 & ES8388
+// ============================================================================
 static esp_err_t i2c_write_byte(uint8_t reg, uint8_t val) {
     if (!s_i2c_ready) return ESP_FAIL;
     uint8_t buf[2] = {reg, val};
     return i2c_master_write_to_device(I2C_PORT_NUM, s_i2c_addr, buf, 2, pdMS_TO_TICKS(15));
+}
+
+static esp_err_t es8388_write_reg(uint8_t reg, uint8_t val) {
+    if (!s_es8388_ready) return ESP_FAIL;
+    uint8_t buf[2] = {reg, val};
+    return i2c_master_write_to_device(I2C_PORT_NUM, s_es8388_addr, buf, 2, pdMS_TO_TICKS(15));
 }
 
 static inline void cs_select(uint8_t ic_idx) {
@@ -186,38 +215,31 @@ static bool try_i2c_pair(gpio_num_t sda, gpio_num_t scl) {
     if (i2c_param_config(I2C_PORT_NUM, &conf) != ESP_OK) return false;
     if (i2c_driver_install(I2C_PORT_NUM, conf.mode, 0, 0, 0) != ESP_OK) return false;
 
-    if (probe_i2c_addr(0x20)) {
-        s_i2c_addr = 0x20;
-        s_i2c_ready = true;
-        LOG_DIRECT("[I2C] >>> KET NOI THANH CONG PI4IOE5V6416 TAI 0x20 (SDA=%d, SCL=%d) <<<\r\n", sda, scl);
-        return true;
-    }
-    if (probe_i2c_addr(0x21)) {
-        s_i2c_addr = 0x21;
-        s_i2c_ready = true;
-        LOG_DIRECT("[I2C] >>> KET NOI THANH CONG PI4IOE5V6416 TAI 0x21 (SDA=%d, SCL=%d) <<<\r\n", sda, scl);
-        return true;
-    }
-    for (uint8_t a = 0x10; a < 0x78; a++) {
-        if (a == 0x20 || a == 0x21) continue;
+    LOG_DIRECT("[I2C] Quet toan bo bus (SDA=%d, SCL=%d):\r\n", sda, scl);
+    for (uint8_t a = 0x08; a < 0x78; a++) {
         if (probe_i2c_addr(a)) {
-            s_i2c_addr = a;
-            s_i2c_ready = true;
-            LOG_DIRECT("[I2C] >>> PHAT HIEN THIET BI TAI 0x%02X (SDA=%d, SCL=%d) <<<\r\n", a, sda, scl);
-            return true;
+            LOG_DIRECT("  -> Phat hien IC tai dia chi: 0x%02X\r\n", a);
+            if (a == 0x20 || a == 0x21) {
+                s_i2c_addr = a;
+                s_i2c_ready = true;
+            }
+            if (a == 0x10 || a == 0x11) {
+                s_es8388_addr = a;
+                s_es8388_ready = true;
+            }
         }
+    }
+
+    if (s_i2c_ready) {
+        LOG_DIRECT("[I2C] >>> PI4IOE5V6416 OK tai 0x%02X <<<\r\n", s_i2c_addr);
+        return true;
     }
     return false;
 }
 
 static void scan_and_init_i2c(void) {
-    // Chiều 1: SDA=20, SCL=21
     if (try_i2c_pair(GPIO_NUM_20, GPIO_NUM_21)) goto init_chip;
-    // Chiều 2: SDA=21, SCL=20
     if (try_i2c_pair(GPIO_NUM_21, GPIO_NUM_20)) goto init_chip;
-    // Chiều 3: SDA=4, SCL=5
-    if (try_i2c_pair(GPIO_NUM_4, GPIO_NUM_5)) goto init_chip;
-
     LOG_DIRECT("[I2C] Dang cho ket noi chip PI4IOE5V6416...\r\n");
     return;
 
@@ -229,6 +251,299 @@ init_chip:
     i2c_write_byte(0x07, 0x00);         // Config Port 1: OUTPUT
     i2c_write_byte(0x4F, 0x00);         // Push-Pull output
     LOG_DIRECT("[I2C] Cau hinh PI4IOE5V6416 Port 0 lam CS1..CS4 thanh cong!\r\n");
+}
+
+// ============================================================================
+// BỘ ĐIỀU KHIỂN ÂM THANH ES8388 & I2S MASTER
+// ============================================================================
+static bool init_i2s(void) {
+    LOG_DIRECT("[I2S] Dang khoi tao I2S Master (MCLK=%d, BCLK=%d, DOUT=%d, WS=%d)...\r\n",
+               PIN_I2S_MCLK, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS);
+
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    esp_err_t ret = i2s_new_channel(&chan_cfg, &s_tx_handle, NULL);
+    if (ret != ESP_OK) {
+        LOG_DIRECT("[I2S] Loi tao channel: %s\r\n", esp_err_to_name(ret));
+        return false;
+    }
+
+    i2s_std_config_t std_cfg = {
+        .clk_cfg = {
+            .sample_rate_hz = I2S_SAMPLE_RATE,
+            .clk_src = I2S_CLK_SRC_DEFAULT,
+            .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+        },
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = PIN_I2S_MCLK,
+            .bclk = PIN_I2S_BCLK,
+            .ws   = PIN_I2S_WS,
+            .dout = PIN_I2S_DOUT,
+            .din  = I2S_GPIO_UNUSED,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv   = false,
+            },
+        },
+    };
+
+    ret = i2s_channel_init_std_mode(s_tx_handle, &std_cfg);
+    if (ret != ESP_OK) {
+        LOG_DIRECT("[I2S] Loi init std mode: %s\r\n", esp_err_to_name(ret));
+        return false;
+    }
+
+    ret = i2s_channel_enable(s_tx_handle);
+    if (ret != ESP_OK) {
+        LOG_DIRECT("[I2S] Loi enable channel: %s\r\n", esp_err_to_name(ret));
+        return false;
+    }
+
+    LOG_DIRECT("[I2S] I2S Driver da san sang xuat xung Master Clock va Data!\r\n");
+    return true;
+}
+
+static bool init_es8388(void) {
+    if (!s_es8388_ready) {
+        if (probe_i2c_addr(0x10)) {
+            s_es8388_addr = 0x10;
+            s_es8388_ready = true;
+        } else if (probe_i2c_addr(0x11)) {
+            s_es8388_addr = 0x11;
+            s_es8388_ready = true;
+        }
+    }
+
+    if (!s_es8388_ready) {
+        LOG_DIRECT("[ES8388] CHUA PHAT HIEN ES8388 TAI 0x10 / 0x11 (Kiem tra nguon/han I2C)!\r\n");
+        return false;
+    }
+
+    LOG_DIRECT("[ES8388] Khoi tao chip DAC tai dia chi 0x%02X...\r\n", s_es8388_addr);
+
+    // 1. Reset chip
+    es8388_write_reg(0x00, 0x80);
+    vTaskDelay(pdMS_TO_TICKS(15));
+    es8388_write_reg(0x00, 0x00);
+
+    // 2. Power On
+    es8388_write_reg(0x01, 0x58); // VMID / VREF on
+    es8388_write_reg(0x02, 0x00); // Digital power up
+    es8388_write_reg(0x03, 0xFF); // ADC off (playback only)
+    es8388_write_reg(0x04, 0x3C); // DAC on, OUT1 & OUT2 on
+    es8388_write_reg(0x07, 0x7C); // Analog reference
+
+    // 3. I2S Slave Mode (ESP32 phat xung)
+    es8388_write_reg(0x08, 0x00);
+
+    // 4. Format 16-bit, 256*Fs
+    es8388_write_reg(0x17, 0x18);
+    es8388_write_reg(0x18, 0x02);
+
+    // 5. Output Mixer
+    es8388_write_reg(0x26, 0x00);
+    es8388_write_reg(0x27, 0xB8); // Left DAC -> Left Mixer (0dB)
+    es8388_write_reg(0x2A, 0xB8); // Right DAC -> Right Mixer (0dB)
+
+    // 6. Mo Volume toi da (0dB) cho ca OUT1 va OUT2
+    es8388_write_reg(0x2E, 0x1E); // LOUT1
+    es8388_write_reg(0x2F, 0x1E); // ROUT1
+    es8388_write_reg(0x30, 0x1E); // LOUT2 (Loa ngoài)
+    es8388_write_reg(0x31, 0x1E); // ROUT2 (Loa ngoài)
+    es8388_write_reg(0x1A, 0x00); // Left Digital Volume (0dB)
+    es8388_write_reg(0x1B, 0x00); // Right Digital Volume (0dB)
+
+    // 7. Unmute & Enable DAC
+    es8388_write_reg(0x19, 0x00); // Unmute DAC
+    es8388_write_reg(0x2B, 0x80); // Enable DAC state machine
+
+    LOG_DIRECT("[ES8388] Khoi tao thanh cong! DAC da bat va un-mute 100%.\r\n");
+    return true;
+}
+
+static void init_amplifier_gpio(void) {
+    gpio_config_t io_conf = {};
+    io_conf.pin_bit_mask = (1ULL << GPIO_NUM_2) | (1ULL << GPIO_NUM_3) | (1ULL << GPIO_NUM_4) | (1ULL << GPIO_NUM_10);
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    gpio_config(&io_conf);
+
+    gpio_set_level(GPIO_NUM_2, 1);
+    gpio_set_level(GPIO_NUM_3, 1);
+    gpio_set_level(GPIO_NUM_4, 1);
+    gpio_set_level(GPIO_NUM_10, 1);
+    LOG_DIRECT("[AMP] Da kich hoat muc logic cao cac chan PA EN du phong (GPIO 2, 3, 4, 10).\r\n");
+}
+
+// ============================================================================
+// HỆ THỐNG ÂM THANH RETRO CHIPTUNE TỔNG HỢP
+// ============================================================================
+typedef enum {
+    SOUND_NONE = 0,
+    SOUND_STARTUP,
+    SOUND_DIGIT,
+    SOUND_HEARTBEAT,
+    SOUND_SMILEY,
+    SOUND_PACMAN,
+    SOUND_THUNDER,
+    SOUND_EQUALIZER,
+    SOUND_FIRE,
+} sound_effect_t;
+
+static QueueHandle_t s_sound_queue = NULL;
+
+static void trigger_sound(sound_effect_t sfx) {
+    if (s_sound_queue) {
+        xQueueSend(s_sound_queue, &sfx, 0);
+    }
+}
+
+static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
+    if (!s_tx_handle || freq == 0) {
+        vTaskDelay(pdMS_TO_TICKS(duration_ms));
+        return;
+    }
+    int total_samples = (I2S_SAMPLE_RATE * duration_ms) / 1000;
+    int16_t buf[128 * 2];
+    uint32_t phase = 0;
+    uint32_t phase_step = ((uint32_t)freq * 256 * 256) / I2S_SAMPLE_RATE;
+
+    int samples_left = total_samples;
+    while (samples_left > 0) {
+        int chunk = (samples_left > 128) ? 128 : samples_left;
+        for (int i = 0; i < chunk; i++) {
+            int current_sample = total_samples - samples_left + i;
+            int current_vol = volume;
+            if (current_sample < 80) {
+                current_vol = (volume * current_sample) / 80;
+            } else if (samples_left - i < 160) {
+                current_vol = (volume * (samples_left - i)) / 160;
+            }
+
+            uint8_t table_idx = (phase >> 8) & 0xFF;
+            int16_t sample_val = (int16_t)(((int32_t)SINE_TABLE[table_idx] * current_vol) >> 15);
+            buf[i * 2]     = sample_val;
+            buf[i * 2 + 1] = sample_val;
+            phase += phase_step;
+        }
+        size_t written = 0;
+        i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, pdMS_TO_TICKS(100));
+        samples_left -= chunk;
+    }
+}
+
+static void play_startup_jingle(void) {
+    play_tone(523, 90, 24000);  // C5
+    vTaskDelay(pdMS_TO_TICKS(15));
+    play_tone(659, 90, 24000);  // E5
+    vTaskDelay(pdMS_TO_TICKS(15));
+    play_tone(784, 90, 24000);  // G5
+    vTaskDelay(pdMS_TO_TICKS(15));
+    play_tone(1046, 240, 26000); // C6
+}
+
+static void play_digit_ding(void) {
+    play_tone(1318, 45, 20000); // E6
+}
+
+static void play_heartbeat_sfx(void) {
+    play_tone(60, 80, 28000);
+    vTaskDelay(pdMS_TO_TICKS(60));
+    play_tone(52, 100, 26000);
+}
+
+static void play_smiley_sfx(void) {
+    for (int f = 600; f <= 1300; f += 80) {
+        play_tone(f, 20, 22000);
+    }
+}
+
+static void play_pacman_sfx(void) {
+    for (int cycle = 0; cycle < 3; cycle++) {
+        for (int f = 380; f <= 750; f += 65) {
+            play_tone(f, 12, 24000);
+        }
+        for (int f = 750; f >= 380; f -= 65) {
+            play_tone(f, 12, 24000);
+        }
+    }
+}
+
+static void play_thunder_sfx(void) {
+    int total_samples = I2S_SAMPLE_RATE * 600 / 1000;
+    int16_t buf[128 * 2];
+    int samples_left = total_samples;
+    uint32_t seed = 12345;
+    int16_t filter = 0;
+
+    while (samples_left > 0) {
+        int chunk = (samples_left > 128) ? 128 : samples_left;
+        int vol = (26000 * samples_left) / total_samples;
+
+        for (int i = 0; i < chunk; i++) {
+            seed = seed * 1103515245 + 12345;
+            int16_t raw_noise = (int16_t)((seed >> 16) & 0x7FFF) - 16384;
+            filter = (filter * 3 + raw_noise) / 4;
+            int16_t val = (int16_t)(((int32_t)filter * vol) / 32768);
+            buf[i * 2]     = val;
+            buf[i * 2 + 1] = val;
+        }
+        size_t written = 0;
+        i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, pdMS_TO_TICKS(100));
+        samples_left -= chunk;
+    }
+}
+
+static void play_equalizer_melody(void) {
+    uint16_t notes[] = {220, 277, 330, 440, 330, 277, 220, 165};
+    for (int i = 0; i < 8; i++) {
+        play_tone(notes[i], 100, 22000);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+static void play_fire_crackles(void) {
+    int total_samples = I2S_SAMPLE_RATE * 500 / 1000;
+    int16_t buf[128 * 2];
+    int samples_left = total_samples;
+    uint32_t seed = 54321;
+    while (samples_left > 0) {
+        int chunk = (samples_left > 128) ? 128 : samples_left;
+        for (int i = 0; i < chunk; i++) {
+            seed = seed * 1664525 + 1013904223;
+            int16_t val = 0;
+            if ((seed & 0xFFF) < 15) {
+                val = (seed & 0x1) ? 22000 : -22000;
+            } else if ((seed & 0xFF) < 35) {
+                val = (int16_t)((seed & 0x7FF) - 1024);
+            }
+            buf[i * 2]     = val;
+            buf[i * 2 + 1] = val;
+        }
+        size_t written = 0;
+        i2s_channel_write(s_tx_handle, buf, chunk * sizeof(int16_t) * 2, &written, pdMS_TO_TICKS(100));
+        samples_left -= chunk;
+    }
+}
+
+static void audio_task(void *pvParameters) {
+    sound_effect_t sfx;
+    while (1) {
+        if (xQueueReceive(s_sound_queue, &sfx, portMAX_DELAY) == pdTRUE) {
+            switch (sfx) {
+                case SOUND_STARTUP:   play_startup_jingle(); break;
+                case SOUND_DIGIT:     play_digit_ding(); break;
+                case SOUND_HEARTBEAT: play_heartbeat_sfx(); break;
+                case SOUND_SMILEY:    play_smiley_sfx(); break;
+                case SOUND_PACMAN:    play_pacman_sfx(); break;
+                case SOUND_THUNDER:   play_thunder_sfx(); break;
+                case SOUND_EQUALIZER: play_equalizer_melody(); break;
+                case SOUND_FIRE:      play_fire_crackles(); break;
+                default: break;
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -265,7 +580,6 @@ static void draw_bitmap(const uint16_t bmp[16], bool r, bool g, bool b) {
     }
 }
 
-// Vẽ ký tự Font 16x16 (0-9, A-Z)
 static void draw_char(char c, bool r, bool g, bool b) {
     int idx = -1;
     if (c >= '0' && c <= '9') idx = c - '0';
@@ -277,38 +591,30 @@ static void draw_char(char c, bool r, bool g, bool b) {
     }
 }
 
-// ----------------------------------------------------------------------------
-// 1. TEST MÀU TOÀN MÀN HÌNH (R, G, B, WHITE)
-// ----------------------------------------------------------------------------
+// 1. TEST MÀU TOÀN MÀN HÌNH
 static void test_full_colors(void) {
     LOG_DIRECT(">>> 1. TEST TOAN MAN HINH: RED -> GREEN -> BLUE -> WHITE <<<\r\n");
 
-    // ĐỎ
     fb_clear();
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) draw_pixel(x, y, true, false, false);
     fb_render(); vTaskDelay(pdMS_TO_TICKS(1000));
 
-    // XANH LÁ
     fb_clear();
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) draw_pixel(x, y, false, true, false);
     fb_render(); vTaskDelay(pdMS_TO_TICKS(1000));
 
-    // XANH DƯƠNG
     fb_clear();
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) draw_pixel(x, y, false, false, true);
     fb_render(); vTaskDelay(pdMS_TO_TICKS(1000));
 
-    // TRẮNG
     fb_clear();
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) draw_pixel(x, y, true, true, true);
     fb_render(); vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
-// ----------------------------------------------------------------------------
-// 2. CHẠY CHỮ SỐ 0 -> 9 (ĐA SẮC MÀU)
-// ----------------------------------------------------------------------------
+// 2. CHẠY CHỮ SỐ 0 -> 9 (KÈM ÂM THANH DING)
 static void test_digits_0_to_9(void) {
-    LOG_DIRECT(">>> 2. TEST CHU SO 0 -> 9 <<<\r\n");
+    LOG_DIRECT(">>> 2. TEST CHU SO 0 -> 9 (Kem am thanh Ding) <<<\r\n");
     bool colors[10][3] = {
         {true, false, false}, // 0: Đỏ
         {false, true, false}, // 1: Xanh lá
@@ -325,28 +631,26 @@ static void test_digits_0_to_9(void) {
     for (int d = 0; d <= 9; d++) {
         fb_clear();
         draw_char('0' + d, colors[d][0], colors[d][1], colors[d][2]);
+        trigger_sound(SOUND_DIGIT);
         fb_render();
         vTaskDelay(pdMS_TO_TICKS(650));
     }
 }
 
-// ----------------------------------------------------------------------------
-// 3. CHẠY TỪ KHÓA CHỮ CÁI: E -> S -> P -> 3 -> 2 -> O -> K
-// ----------------------------------------------------------------------------
+// 3. CHẠY TỪ KHÓA CHỮ CÁI: E-S-P-3-2  O-K
 static void test_words_esp_ok(void) {
     LOG_DIRECT(">>> 3. TEST CHU CAI: E-S-P-3-2  O-K <<<\r\n");
     const char text[] = "ESP32OK";
     for (int i = 0; text[i] != '\0'; i++) {
         fb_clear();
-        draw_char(text[i], true, true, false); // Màu vàng rực rỡ
+        draw_char(text[i], true, true, false);
+        trigger_sound(SOUND_DIGIT);
         fb_render();
         vTaskDelay(pdMS_TO_TICKS(700));
     }
 }
 
-// ----------------------------------------------------------------------------
 // 4. BỘ 6 HOẠT HÌNH PIXEL ART
-// ----------------------------------------------------------------------------
 static const uint16_t HEART_BIG[16] = {
     0x0000, 0x0E70, 0x3FFC, 0x7FFE, 0x7FFE, 0x7FFE, 0x3FFC, 0x3FFC,
     0x1FF8, 0x0FF0, 0x07E0, 0x03C0, 0x0180, 0x0000, 0x0000, 0x0000
@@ -357,14 +661,15 @@ static const uint16_t HEART_SMALL[16] = {
 };
 
 static void anim_beating_heart(int duration_ms) {
-    LOG_DIRECT("  [Animation] 1. Trai tim dap...\r\n");
+    LOG_DIRECT("  [Animation] 1. Trai tim dap (Kem tieng tim dap)...\r\n");
     int elapsed = 0;
     while (elapsed < duration_ms) {
         fb_clear();
         draw_bitmap(HEART_BIG, true, false, false);
         draw_pixel(4, 3, true, true, true);
         draw_pixel(4, 4, true, true, true);
-        fb_render(); vTaskDelay(pdMS_TO_TICKS(180));
+        trigger_sound(SOUND_HEARTBEAT);
+        fb_render(); vTaskDelay(pdMS_TO_TICKS(220));
 
         fb_clear();
         draw_bitmap(HEART_SMALL, true, false, false);
@@ -381,7 +686,7 @@ static void anim_beating_heart(int duration_ms) {
         draw_bitmap(HEART_SMALL, true, false, false);
         fb_render(); vTaskDelay(pdMS_TO_TICKS(450));
 
-        elapsed += (180 + 140 + 200 + 450);
+        elapsed += (220 + 140 + 200 + 450);
     }
 }
 
@@ -395,7 +700,7 @@ static const uint16_t SMILEY_WINK[16] = {
 };
 
 static void anim_winking_smiley(int duration_ms) {
-    LOG_DIRECT("  [Animation] 2. Mat cuoi nhay mat...\r\n");
+    LOG_DIRECT("  [Animation] 2. Mat cuoi nhay mat (Kem tieng Chirp)...\r\n");
     int elapsed = 0;
     while (elapsed < duration_ms) {
         fb_clear();
@@ -404,9 +709,10 @@ static void anim_winking_smiley(int duration_ms) {
 
         fb_clear();
         draw_bitmap(SMILEY_WINK, true, true, false);
-        fb_render(); vTaskDelay(pdMS_TO_TICKS(250));
+        trigger_sound(SOUND_SMILEY);
+        fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
 
-        elapsed += 1050;
+        elapsed += 1100;
     }
 }
 
@@ -420,12 +726,16 @@ static const uint16_t PACMAN_CLOSED[16] = {
 };
 
 static void anim_pacman(int duration_ms) {
-    LOG_DIRECT("  [Animation] 3. Pac-Man an keo...\r\n");
+    LOG_DIRECT("  [Animation] 3. Pac-Man an keo (Kem am thanh Waka-waka)...\r\n");
     int elapsed = 0, step = 0;
     while (elapsed < duration_ms) {
         fb_clear();
-        if (step % 2 == 0) draw_bitmap(PACMAN_OPEN, true, true, false);
-        else draw_bitmap(PACMAN_CLOSED, true, true, false);
+        if (step % 2 == 0) {
+            draw_bitmap(PACMAN_OPEN, true, true, false);
+            trigger_sound(SOUND_PACMAN);
+        } else {
+            draw_bitmap(PACMAN_CLOSED, true, true, false);
+        }
 
         draw_pixel(13, 7, false, true, true);
         draw_pixel(14, 7, false, true, true);
@@ -443,7 +753,7 @@ static const uint16_t CLOUD_BMP[16] = {
 };
 
 static void anim_rain_and_thunder(int duration_ms) {
-    LOG_DIRECT("  [Animation] 4. May mua & Sam chop...\r\n");
+    LOG_DIRECT("  [Animation] 4. May mua & Sam chop (Kem tieng sam)... \r\n");
     int elapsed = 0, drop_frame = 0;
     while (elapsed < duration_ms) {
         fb_clear();
@@ -455,12 +765,14 @@ static void anim_rain_and_thunder(int duration_ms) {
         }
 
         if (drop_frame % 14 == 0) {
+            // Sam chop vang ruc
             draw_pixel(7, 8, true, true, false);
             draw_pixel(8, 9, true, true, false);
             draw_pixel(7, 10, true, true, false);
             draw_pixel(6, 11, true, true, false);
             draw_pixel(7, 12, true, true, false);
             draw_pixel(8, 13, true, true, false);
+            trigger_sound(SOUND_THUNDER);
         }
 
         fb_render(); vTaskDelay(pdMS_TO_TICKS(120));
@@ -469,9 +781,11 @@ static void anim_rain_and_thunder(int duration_ms) {
 }
 
 static void anim_equalizer(int duration_ms) {
-    LOG_DIRECT("  [Animation] 5. Cot song Equalizer...\r\n");
+    LOG_DIRECT("  [Animation] 5. Cot song Equalizer (Kem giai dieu 8-bit)...\r\n");
     int elapsed = 0;
     int peaks[16] = {0};
+    trigger_sound(SOUND_EQUALIZER);
+
     while (elapsed < duration_ms) {
         fb_clear();
         for (int x = 0; x < 16; x++) {
@@ -494,9 +808,10 @@ static void anim_equalizer(int duration_ms) {
 }
 
 static void anim_doom_fire(int duration_ms) {
-    LOG_DIRECT("  [Animation] 6. Ngon lua Doom Fire...\r\n");
+    LOG_DIRECT("  [Animation] 6. Ngon lua Doom Fire (Kem tieng lua reo)...\r\n");
     int elapsed = 0;
     uint8_t fire[16][16] = {0};
+    trigger_sound(SOUND_FIRE);
 
     while (elapsed < duration_ms) {
         fb_clear();
@@ -538,8 +853,15 @@ static void display_task(void *pvParameters) {
             init_ht16d35a(i);
             vTaskDelay(pdMS_TO_TICKS(30));
         }
-        LOG_DIRECT("=== KHOI TAO THANH CONG! BAT DAU TRINH DIEN ===\r\n");
+        LOG_DIRECT("=== KHOI TAO HT16D35A THANH CONG! ===\r\n");
     }
+
+    // Khởi tạo I2S và DAC ES8388
+    init_i2s();
+    init_es8388();
+
+    // Phát chuông khởi động
+    trigger_sound(SOUND_STARTUP);
 
     uint32_t round = 0;
     while (1) {
@@ -596,19 +918,6 @@ static void display_task(void *pvParameters) {
     }
 }
 
-// Task nhấp nháy đèn LED bo mạch (GPIO 8)
-static void blink_task(void *pvParameters) {
-    gpio_reset_pin(PIN_LED_BOARD);
-    gpio_set_direction(PIN_LED_BOARD, GPIO_MODE_OUTPUT);
-
-    int level = 0;
-    while (1) {
-        gpio_set_level(PIN_LED_BOARD, level);
-        level = !level;
-        vTaskDelay(pdMS_TO_TICKS(250)); // Nhấp nháy 2 lần mỗi giây
-    }
-}
-
 extern "C" void app_main(void) {
     // Đặt stdout sang Non-blocking
     int flags = fcntl(fileno(stdout), F_GETFL, 0);
@@ -617,8 +926,9 @@ extern "C" void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(1000));
 
     LOG_DIRECT("\r\n\r\n======================================================\r\n");
-    LOG_DIRECT("  FIRMWARE MA TRAN LED 16x16 RGB + PI4IOE5V6416\r\n");
-    LOG_DIRECT("  CLK=GPIO 1 | DIO=GPIO 0 | SDA=GPIO 20 | SCL=GPIO 21\r\n");
+    LOG_DIRECT("  FIRMWARE MA TRAN LED 16x16 RGB + AM THANH ES8388 DAC\r\n");
+    LOG_DIRECT("  LED: CLK=GPIO 1, DIO=GPIO 0 | I2C: SDA=GPIO 20, SCL=GPIO 21\r\n");
+    LOG_DIRECT("  I2S DAC: MCLK=GPIO 8, BCLK=GPIO 5, DOUT=GPIO 6, WS=GPIO 7\r\n");
     LOG_DIRECT("======================================================\r\n\r\n");
 
     // 1. Cấu hình chân SPI HT16D35A
@@ -629,9 +939,15 @@ extern "C" void app_main(void) {
     gpio_set_level(PIN_CLK, 0);
     gpio_set_level(PIN_DIO, 0);
 
-    // 2. Chạy task nhấp nháy đèn bo mạch
-    xTaskCreate(blink_task, "blink_task", 2048, NULL, 3, NULL);
+    // 2. Kích hoạt chân công suất dự phòng (PA EN)
+    init_amplifier_gpio();
 
-    // 3. Chạy task điều khiển hiển thị
+    // 3. Khởi tạo hàng đợi âm thanh
+    s_sound_queue = xQueueCreate(10, sizeof(sound_effect_t));
+
+    // 4. Tạo task âm thanh chạy độc lập
+    xTaskCreate(audio_task, "audio_task", 4096, NULL, 6, NULL);
+
+    // 5. Chạy task điều khiển hiển thị
     xTaskCreate(display_task, "display_task", 6144, NULL, 5, NULL);
 }
