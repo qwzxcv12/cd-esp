@@ -238,12 +238,17 @@ static bool try_i2c_pair(gpio_num_t sda, gpio_num_t scl) {
         LOG_DIRECT("[I2C] >>> PI4IOE5V6416 san sang tai 0x21 (SDA=%d, SCL=%d) <<<\r\n", sda, scl);
     }
 
-    // 2. Kiểm tra nhanh chip DAC ES8388 (0x10 hoặc 0x11)
-    if (probe_i2c_addr(0x10)) {
-        s_es8388_addr = 0x10;
-        s_es8388_ready = true;
-        LOG_DIRECT("[I2C] >>> ES8388 DAC san sang tai 0x10 <<<\r\n");
-    } else if (probe_i2c_addr(0x11)) {
+    // 2. Kiểm tra nhanh chip DAC ES8388 (ưu tiên 0x10 chuẩn, thử lại 1 nhịp nếu chip vừa cấp nguồn)
+    for (int retry = 0; retry < 2 && !s_es8388_ready; retry++) {
+        if (probe_i2c_addr(0x10)) {
+            s_es8388_addr = 0x10;
+            s_es8388_ready = true;
+            LOG_DIRECT("[I2C] >>> ES8388 DAC san sang tai 0x10 <<<\r\n");
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(15));
+        }
+    }
+    if (!s_es8388_ready && probe_i2c_addr(0x11)) {
         s_es8388_addr = 0x11;
         s_es8388_ready = true;
         LOG_DIRECT("[I2C] >>> ES8388 DAC san sang tai 0x11 <<<\r\n");
@@ -375,9 +380,9 @@ static bool init_i2s(void) {
 
         ledc_timer_config_t tc = {};
         tc.speed_mode      = LEDC_LOW_SPEED_MODE;
-        tc.duty_resolution = LEDC_TIMER_2_BIT;
+        tc.duty_resolution = LEDC_TIMER_1_BIT;
         tc.timer_num       = LEDC_TIMER_0;
-        tc.freq_hz         = 10000000; // 10 MHz MCLK -> SCLK=2.5MHz, LRCK=39kHz
+        tc.freq_hz         = 4000000; // 4 MHz MCLK -> SCLK=1MHz, LRCK=15.6kHz
         tc.clk_cfg         = LEDC_AUTO_CLK;
         esp_err_t terr = ledc_timer_config(&tc);
 
@@ -387,7 +392,7 @@ static bool init_i2s(void) {
         cc.channel    = LEDC_CHANNEL_0;
         cc.intr_type  = LEDC_INTR_DISABLE;
         cc.timer_sel  = LEDC_TIMER_0;
-        cc.duty       = 2;
+        cc.duty       = 1;
         cc.hpoint     = 0;
         esp_err_t cerr = ledc_channel_config(&cc);
 
@@ -410,7 +415,7 @@ static bool init_i2s(void) {
         gpio_reset_pin(PIN_I2S_BCLK);
         gpio_reset_pin(PIN_I2S_DOUT);
         gpio_reset_pin(PIN_I2S_WS);
-        LOG_DIRECT("[ES8388 Loopback @10MHz] R02=0x%02X R03=0x%02X R04=0x%02X R08=0x%02X | terr=%s cerr=%s -> SCLK(GPIO5)=%d, LRCK(GPIO7)=%d, DOUT(GPIO6)=%d\r\n",
+        LOG_DIRECT("[ES8388 Loopback @4MHz] R02=0x%02X R03=0x%02X R04=0x%02X R08=0x%02X | terr=%s cerr=%s -> SCLK(GPIO5)=%d, LRCK(GPIO7)=%d, DOUT(GPIO6)=%d\r\n",
                    lb_r02, lb_r03, lb_r04, lb_r08,
                    esp_err_to_name(terr), esp_err_to_name(cerr), b_edges, w_edges, d_edges);
     }
@@ -545,6 +550,13 @@ static bool init_es8388(void) {
     es8388_read_reg(0x30, &r30);
     LOG_DIRECT("[ES8388] Doc lai: R00=0x%02X R01=0x%02X R02=0x%02X R04=0x%02X R17=0x%02X R18=0x%02X R19=0x%02X R27=0x%02X R2B=0x%02X OUT1=0x%02X OUT2=0x%02X\r\n",
                r00, r01, r02, r04, r17, r18, r19, r27, r2b, r2e, r30);
+
+    if (r04 != 0x3C || r17 != 0x18) {
+        LOG_DIRECT("[ES8388] LOI: Thanh ghi khong khop (I2C sai dia chi 0x%02X?), se thu lai!\r\n", s_es8388_addr);
+        s_es8388_ready = false;
+        s_es8388_inited = false;
+        return false;
+    }
 
     s_es8388_inited = true;
     LOG_DIRECT("[ES8388] Khoi tao thanh cong!\r\n");
@@ -709,13 +721,12 @@ static void play_music_note(uint16_t freq, uint16_t duration_ms, int16_t volume)
 }
 
 static void play_startup_jingle(void) {
-    // Am giai Do-Re-Mi-Fa-Sol-La-Si-Do am thanh kieu hop nhac (khong bi tieng "tit")
-    const uint16_t scale[] = {262, 294, 330, 349, 392, 440, 494, 523};
-    for (int i = 0; i < 7; i++) {
-        play_music_note(scale[i], 190, 22000);
-        play_silence(25);
+    // 8 not quãng C5-C6 (523-1046Hz) ngân đều 350ms, nghỉ 120ms mỗi nốt -> cực rõ 8 nốt trên loa nhỏ
+    const uint16_t scale[] = {523, 587, 659, 698, 784, 880, 988, 1046};
+    for (int i = 0; i < 8; i++) {
+        play_tone(scale[i], 350, 16000);
+        play_silence(120);
     }
-    play_music_note(scale[7], 480, 24000);
 }
 
 static void play_digit_ding(void) {
@@ -1158,10 +1169,10 @@ static void display_task(void *pvParameters) {
     init_i2s();
     init_es8388();
 
-    // Phat am giai Do-Re-Mi-Fa-Sol-La-Si-Do kieu hop nhac luc tat ca LED dang tat
-    LOG_DIRECT("[AUDIO] Test am giai Do-Re-Mi-Fa-Sol-La-Si-Do luc LED tat...\r\n");
+    // Phat cham 8 not quang C5-C6 (moi not 350ms, nghi 120ms) luc tat ca LED dang tat
+    LOG_DIRECT("[AUDIO] Test 8 not cham C5-C6 (523->1046Hz) luc LED tat...\r\n");
     trigger_sound(SOUND_STARTUP);
-    vTaskDelay(pdMS_TO_TICKS(2300));
+    vTaskDelay(pdMS_TO_TICKS(4200));
 
     uint32_t round = 0;
     while (1) {
