@@ -314,7 +314,7 @@ static bool init_i2s(void) {
     LOG_DIRECT("[I2S] Dang khoi tao I2S Master (MCLK=%d, BCLK=%d, DOUT=%d, WS=%d, Rate=%dHz)...\r\n",
                s_mclk_pin, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS, I2S_SAMPLE_RATE);
 
-    // Kiem tra nhanh tinh trang cham chan truoc khi gan cho I2S
+    // Kiem tra nhanh tinh trang cham chan (PU/PD + keo xuong 0 o dong thap 5mA trong 20us)
     const gpio_num_t i2s_pins[4] = {s_mclk_pin, PIN_I2S_BCLK, PIN_I2S_DOUT, PIN_I2S_WS};
     const char *i2s_names[4] = {"MCLK", "BCLK", "DOUT", "WS"};
     for (int i = 0; i < 4; i++) {
@@ -326,10 +326,20 @@ static bool init_i2s(void) {
         gpio_set_pull_mode(i2s_pins[i], GPIO_PULLDOWN_ONLY);
         delay_us(30);
         int lo = gpio_get_level(i2s_pins[i]);
+        gpio_set_pull_mode(i2s_pins[i], GPIO_FLOATING);
+        gpio_set_direction(i2s_pins[i], GPIO_MODE_INPUT_OUTPUT);
+        gpio_set_drive_capability(i2s_pins[i], GPIO_DRIVE_CAP_0);
+        gpio_set_level(i2s_pins[i], 0);
+        delay_us(20);
+        int drv0 = gpio_get_level(i2s_pins[i]);
+        gpio_set_drive_capability(i2s_pins[i], GPIO_DRIVE_CAP_2);
         gpio_reset_pin(i2s_pins[i]);
-        LOG_DIRECT("[I2S PinCheck] %s(GPIO%d): PU=%d PD=%d %s\r\n",
-                   i2s_names[i], i2s_pins[i], hi, lo,
-                   (hi == 0) ? "<-- KEOVAO GND!" : ((lo == 1) ? "<-- KEOVAO 3V3!" : "(OK/Tha noi)"));
+        const char *status = "(OK)";
+        if (drv0 == 1)      status = "<-- CHAM CUNG 3V3!";
+        else if (hi == 0)   status = "<-- CHAM CUNG GND!";
+        else if (lo == 1)   status = "(Co tro keo len 3V3, van lai duoc 0)";
+        LOG_DIRECT("[I2S PinCheck] %s(GPIO%d): PU=%d PD=%d Drv0=%d %s\r\n",
+                   i2s_names[i], i2s_pins[i], hi, lo, drv0, status);
     }
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
@@ -417,9 +427,9 @@ static bool init_es8388(void) {
     es8388_write_reg(0x2B, 0x80); // DACCONTROL21: slrck=1 (ADC & DAC dung chung LRCK)
     es8388_write_reg(0x2D, 0x00); // DACCONTROL23: VROI = 0
 
-    // 2. Bat nguon tham chieu VMID / EnRef & Ibias
+    // 2. Bat nguon tham chieu VMID / EnRef & Ibias (full normal analog bias)
     es8388_write_reg(0x00, 0x05); // EnRef=1, VMIDSEL=01 (50k nap nhanh tu VMID)
-    es8388_write_reg(0x01, 0x40); // Power ON Analog & Ibias Generator
+    es8388_write_reg(0x01, 0x00); // Power ON Analog, Vref & Ibias Generator (full bias)
     es8388_write_reg(0x03, 0xFF); // Power down ADC
     es8388_write_reg(0x07, 0x7C); // Analog voltage management default
 
@@ -432,11 +442,11 @@ static bool init_es8388(void) {
     es8388_write_reg(0x27, 0x90); // DACCONTROL17: Left DAC -> Left Mixer (0dB)
     es8388_write_reg(0x2A, 0x90); // DACCONTROL20: Right DAC -> Right Mixer (0dB)
 
-    // 5. Dat Volume muc ro rang (-3dB = 0x1C)
-    es8388_write_reg(0x2E, 0x1C); // LOUT1VOL (-3dB)
-    es8388_write_reg(0x2F, 0x1C); // ROUT1VOL (-3dB)
-    es8388_write_reg(0x30, 0x1C); // LOUT2VOL (-3dB)
-    es8388_write_reg(0x31, 0x1C); // ROUT2VOL (-3dB)
+    // 5. Dat Volume chuan 0dB (0x1E = 0dB, toi da 0x21 = +4.5dB)
+    es8388_write_reg(0x2E, 0x1E); // LOUT1VOL (0dB)
+    es8388_write_reg(0x2F, 0x1E); // ROUT1VOL (0dB)
+    es8388_write_reg(0x30, 0x1E); // LOUT2VOL (0dB)
+    es8388_write_reg(0x31, 0x1E); // ROUT2VOL (0dB)
     es8388_write_reg(0x1A, 0x00); // Left Digital Volume = 0dB
     es8388_write_reg(0x1B, 0x00); // Right Digital Volume = 0dB
 
@@ -448,19 +458,20 @@ static bool init_es8388(void) {
     es8388_write_reg(0x19, 0x00); // Unmute DAC!
 
     // 7. Doc nguoc thanh ghi de xac minh ES8388
-    uint8_t r00 = 0, r01 = 0, r02 = 0, r04 = 0, r17 = 0, r19 = 0, r27 = 0, r2b = 0, r2e = 0, r30 = 0;
+    uint8_t r00 = 0, r01 = 0, r02 = 0, r04 = 0, r17 = 0, r18 = 0, r19 = 0, r27 = 0, r2b = 0, r2e = 0, r30 = 0;
     es8388_read_reg(0x00, &r00);
     es8388_read_reg(0x01, &r01);
     es8388_read_reg(0x02, &r02);
     es8388_read_reg(0x04, &r04);
     es8388_read_reg(0x17, &r17);
+    es8388_read_reg(0x18, &r18);
     es8388_read_reg(0x19, &r19);
     es8388_read_reg(0x27, &r27);
     es8388_read_reg(0x2B, &r2b);
     es8388_read_reg(0x2E, &r2e);
     es8388_read_reg(0x30, &r30);
-    LOG_DIRECT("[ES8388] Doc lai: R00=0x%02X R01=0x%02X R02=0x%02X R04=0x%02X R17=0x%02X R19=0x%02X R27=0x%02X R2B=0x%02X OUT1=0x%02X OUT2=0x%02X\r\n",
-               r00, r01, r02, r04, r17, r19, r27, r2b, r2e, r30);
+    LOG_DIRECT("[ES8388] Doc lai: R00=0x%02X R01=0x%02X R02=0x%02X R04=0x%02X R17=0x%02X R18=0x%02X R19=0x%02X R27=0x%02X R2B=0x%02X OUT1=0x%02X OUT2=0x%02X\r\n",
+               r00, r01, r02, r04, r17, r18, r19, r27, r2b, r2e, r30);
 
     s_es8388_inited = true;
     LOG_DIRECT("[ES8388] Khoi tao thanh cong!\r\n");
@@ -510,6 +521,24 @@ static void trigger_sound(sound_effect_t sfx) {
     }
 }
 
+static void play_silence(uint16_t duration_ms) {
+    if (!s_tx_handle || duration_ms == 0) {
+        vTaskDelay(pdMS_TO_TICKS(duration_ms));
+        return;
+    }
+    int total_samples = (I2S_SAMPLE_RATE * duration_ms) / 1000;
+    int16_t zeros[128 * 2] = {0};
+    int samples_left = total_samples;
+    while (samples_left > 0) {
+        int chunk = (samples_left > 128) ? 128 : samples_left;
+        size_t written = 0;
+        if (i2s_channel_write(s_tx_handle, zeros, chunk * sizeof(int16_t) * 2, &written, 1000) != ESP_OK) {
+            break;
+        }
+        samples_left -= chunk;
+    }
+}
+
 static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
     if (!s_tx_handle || freq == 0) {
         vTaskDelay(pdMS_TO_TICKS(duration_ms));
@@ -520,10 +549,12 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
     uint32_t phase = 0;
     uint32_t phase_step = ((uint32_t)freq * 256 * 256) / I2S_SAMPLE_RATE;
 
-    // Giam bien do xuong 1/2 (~12000) de am thanh ro rang ma khong bi meo choi
-    int32_t safe_vol = volume / 2;
-    int attack_len = I2S_SAMPLE_RATE / 200; // 5ms
-    int decay_len  = I2S_SAMPLE_RATE / 100; // 10ms
+    // Bien do ~3/4 volume (~16500-18000): ro rang, day dan, khong vo tieng
+    int32_t safe_vol = ((int32_t)volume * 3) / 4;
+    int attack_len = I2S_SAMPLE_RATE / 200; // 5ms max
+    int decay_len  = I2S_SAMPLE_RATE / 100; // 10ms max
+    if (attack_len > total_samples / 8) attack_len = total_samples / 8;
+    if (decay_len > total_samples / 4)  decay_len  = total_samples / 4;
 
     int samples_left = total_samples;
     while (samples_left > 0) {
@@ -531,9 +562,9 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
         for (int i = 0; i < chunk; i++) {
             int current_sample = total_samples - samples_left + i;
             int32_t current_vol = safe_vol;
-            if (current_sample < attack_len) {
+            if (attack_len > 0 && current_sample < attack_len) {
                 current_vol = (safe_vol * current_sample) / attack_len;
-            } else if (samples_left - i < decay_len) {
+            } else if (decay_len > 0 && (samples_left - i) < decay_len) {
                 current_vol = (safe_vol * (samples_left - i)) / decay_len;
             }
 
@@ -554,17 +585,17 @@ static void play_tone(uint16_t freq, uint16_t duration_ms, int16_t volume) {
 }
 
 static void play_startup_jingle(void) {
-    play_tone(523, 90, 24000);  // C5
-    vTaskDelay(pdMS_TO_TICKS(15));
-    play_tone(659, 90, 24000);  // E5
-    vTaskDelay(pdMS_TO_TICKS(15));
-    play_tone(784, 90, 24000);  // G5
-    vTaskDelay(pdMS_TO_TICKS(15));
-    play_tone(1046, 240, 24000); // C6
+    play_tone(523, 180, 24000);  // C5
+    play_silence(35);
+    play_tone(659, 180, 24000);  // E5
+    play_silence(35);
+    play_tone(784, 180, 24000);  // G5
+    play_silence(35);
+    play_tone(1046, 360, 24000); // C6
 }
 
 static void play_digit_ding(void) {
-    play_tone(1046, 55, 20000); // C6 nhe nhang ro net
+    play_tone(880, 90, 22000); // A5 em diu, ro rang hon
 }
 
 static void play_heartbeat_sfx(void) {
@@ -999,6 +1030,11 @@ static void display_task(void *pvParameters) {
     // Khởi tạo I2S và DAC ES8388
     init_i2s();
     init_es8388();
+
+    // Phat nhac khoi dong C5-E5-G5-C6 luc tat ca LED dang tat (kiem tra nhieu/sut ap)
+    LOG_DIRECT("[AUDIO] Test nhac khoi dong (C5-E5-G5-C6) luc LED dang tat...\r\n");
+    trigger_sound(SOUND_STARTUP);
+    vTaskDelay(pdMS_TO_TICKS(1300));
 
     uint32_t round = 0;
     while (1) {
