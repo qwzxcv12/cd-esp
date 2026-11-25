@@ -424,11 +424,11 @@ static bool init_es8388(void) {
     es8388_write_reg(0x27, 0x90); // DACCONTROL17: Left DAC -> Left Mixer (0dB)
     es8388_write_reg(0x2A, 0x90); // DACCONTROL20: Right DAC -> Right Mixer (0dB)
 
-    // 5. Dat muc analog -9dB (0x18) vua du nghe ro ma khong gay re/bao hoa PAM8403
-    es8388_write_reg(0x2E, 0x18); // LOUT1VOL (-9dB)
-    es8388_write_reg(0x2F, 0x18); // ROUT1VOL (-9dB)
-    es8388_write_reg(0x30, 0x18); // LOUT2VOL (-9dB)
-    es8388_write_reg(0x31, 0x18); // ROUT2VOL (-9dB)
+    // 5. Khoi dau o muc an toan -18dB (0x12) de khong bao gio bi re PAM8403
+    es8388_write_reg(0x2E, 0x12); // LOUT1VOL (-18dB)
+    es8388_write_reg(0x2F, 0x12); // ROUT1VOL (-18dB)
+    es8388_write_reg(0x30, 0x12); // LOUT2VOL (-18dB)
+    es8388_write_reg(0x31, 0x12); // ROUT2VOL (-18dB)
     es8388_write_reg(0x1A, 0x00); // Left Digital Volume = 0dB
     es8388_write_reg(0x1B, 0x00); // Right Digital Volume = 0dB
 
@@ -483,6 +483,14 @@ static void check_es8388_health(const char *tag) {
         LOG_DIRECT("[ES8388] CANH BAO: Chip bi reset/sut ap! Dang khoi tao lai...\r\n");
         init_es8388();
     }
+}
+
+static void es8388_set_out_vol(uint8_t vol_reg) {
+    if (!s_es8388_ready) return;
+    es8388_write_reg(0x2E, vol_reg);
+    es8388_write_reg(0x2F, vol_reg);
+    es8388_write_reg(0x30, vol_reg);
+    es8388_write_reg(0x31, vol_reg);
 }
 
 
@@ -1025,11 +1033,6 @@ static void display_task(void *pvParameters) {
         init_es8388();
     }
 
-    // Chi phat 8 not nhac sach luc tat ca LED dang tat (de nghe phan biet khong re)
-    LOG_DIRECT("[AUDIO] Phat 8 not nhac sach Do-Re-Mi-Fa-Sol-La-Si-Do (LED tat)...\r\n");
-    trigger_sound(SOUND_STARTUP);
-    vTaskDelay(pdMS_TO_TICKS(3000));
-
     uint32_t round = 0;
     while (1) {
         if (!s_i2c_ready) {
@@ -1049,46 +1052,37 @@ static void display_task(void *pvParameters) {
             if (!s_es8388_inited) {
                 init_es8388();
             }
-            // 1. Test màu toàn màn hình (R, G, B, White)
-            test_full_colors();
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
-            check_es8388_health("AfterColors");
 
-            // 2. Chữ số 0 -> 9
-            test_digits_0_to_9();
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
+            // Test do nguong sach tieng theo 5 buoc ro rang:
+            // Buoc 0: LED TAT, OUT=0x16 (-12dB), vol=12000 (muc 2c6699f tung nghe sach)
+            // Buoc 1..4: Hien thi so 1..4 tren LED, tang dan am luong de tim nguong toi da khong re
+            const uint8_t out_regs[5]  = {0x16, 0x12, 0x16, 0x16, 0x17};
+            const int16_t dig_vols[5]  = {12000, 12000, 12000, 18000, 20000};
+            const uint16_t notes[4]    = {523, 659, 784, 1046};
 
-            // 3. Chữ cái ESP32 OK
-            test_words_esp_ok();
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
+            for (int step = 0; step < 5; step++) {
+                fb_clear();
+                if (step == 1) draw_char('1', true, false, false);
+                if (step == 2) draw_char('2', false, true, false);
+                if (step == 3) draw_char('3', true, true, false);
+                if (step == 4) draw_char('4', false, false, true);
+                fb_render();
 
-            // 4. Trái tim đập (6s)
-            anim_beating_heart(6000);
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
-
-            // 5. Mặt cười nháy mắt (5s)
-            anim_winking_smiley(5000);
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
-
-            // 6. Pac-Man (6s)
-            anim_pacman(6000);
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
-
-            // 7. Mây mưa sấm chớp (6s)
-            anim_rain_and_thunder(6000);
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
-
-            // 8. Cột sóng nhạc Equalizer (7s)
-            anim_equalizer(7000);
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(300));
-
-            // 9. Ngọn lửa bập bùng (7s)
-            anim_doom_fire(7000);
-            fb_clear(); fb_render(); vTaskDelay(pdMS_TO_TICKS(500));
+                es8388_set_out_vol(out_regs[step]);
+                vTaskDelay(pdMS_TO_TICKS(80));
+                LOG_DIRECT("[CAL] Buoc %d (%s): OUT=0x%02X vol=%d -> Phat C5-E5-G5-C6...\r\n",
+                           step, (step == 0) ? "LED TAT" : "LED SO", out_regs[step], dig_vols[step]);
+                for (int n = 0; n < 4; n++) {
+                    play_tone(notes[n], 240, dig_vols[step]);
+                    play_silence(50);
+                }
+                play_silence(300);
+                vTaskDelay(pdMS_TO_TICKS(600));
+            }
 
             round++;
-            check_es8388_health("EndRound");
-            LOG_DIRECT(">>> Hoan thanh vong lap trinh dien thu: %lu <<<\r\n", (unsigned long)round);
+            check_es8388_health("AfterCal");
+            LOG_DIRECT(">>> Hoan thanh vong test am luong thu: %lu <<<\r\n", (unsigned long)round);
         }
     }
 }
